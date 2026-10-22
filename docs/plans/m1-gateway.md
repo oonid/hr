@@ -320,7 +320,7 @@ git commit -F- <<'EOF'
 feat: let a command session set its own signal wait
 
 End waits 10 s after SIGTERM before EOF, grace and SIGKILL. A server
-that drains for longer, such as a Hermes gateway finishing a cron job
+that drains for longer, such as a server finishing a scheduled job
 or an API run, was killed mid-drain. CommandSessionFactory now takes
 signalWaitMs, passed to the session's ManagedSession, so a host can
 give one command session a longer drain without changing any other.
@@ -360,7 +360,7 @@ class TerminalSessionTest {
         createNewFile()
     }
     private val profile = File(root, "profile").apply { mkdirs() }
-    private val binds = listOf(Bind(profile.path, "/root/.hermes/profiles/android"))
+    private val binds = listOf(Bind(profile.path, "/srv"))
     private val started = CopyOnWriteArrayList<List<String>>()
 
     private fun factory(binds: List<Bind> = this.binds, session: ProotLauncher.Session? = ProotLauncher.Session(-1)) =
@@ -377,16 +377,16 @@ class TerminalSessionTest {
             listOf(
                 "/data/data/org.example.gateway/files/usr/bin/pr-cli",
                 "login",
-                "hermes",
+                "debian",
                 "--user",
                 "root",
                 "--custom-bind",
-                "/data/data/org.example.gateway/files/hr/profile:/root/.hermes/profiles/android",
+                "/data/data/org.example.host/files/home/srv:/srv",
             ),
             terminalArgs(
                 literalPrefix,
-                "hermes",
-                listOf(Bind("/data/data/org.example.gateway/files/hr/profile", "/root/.hermes/profiles/android")),
+                "debian",
+                listOf(Bind("/data/data/org.example.host/files/home/srv", "/srv")),
             ),
         )
     }
@@ -409,9 +409,9 @@ class TerminalSessionTest {
 
     @Test
     fun theTerminalLogsIntoTheKeyWithItsBinds() {
-        factory().startLogin("hermes")
+        factory().startLogin("debian")
 
-        assertEquals(listOf(terminalArgs(host.prefixDir, "hermes", binds)), started)
+        assertEquals(listOf(terminalArgs(host.prefixDir, "debian", binds)), started)
     }
 
     @Test
@@ -419,10 +419,10 @@ class TerminalSessionTest {
         val missing = File(root, "absent")
 
         val e = assertThrows(IllegalStateException::class.java) {
-            factory(binds = binds + Bind(missing.path, "/mnt")).startLogin("hermes")
+            factory(binds = binds + Bind(missing.path, "/mnt")).startLogin("debian")
         }
 
-        assertEquals("could not start a terminal for hermes: no bind source $missing", e.message)
+        assertEquals("could not start a terminal for debian: no bind source $missing", e.message)
         assertTrue(started.isEmpty())
     }
 
@@ -430,17 +430,17 @@ class TerminalSessionTest {
     fun aMissingPrCliFailsTheTerminalAndStartsNothing() {
         prCli.delete()
 
-        val e = assertThrows(IllegalStateException::class.java) { factory().startLogin("hermes") }
+        val e = assertThrows(IllegalStateException::class.java) { factory().startLogin("debian") }
 
-        assertEquals("could not start a terminal for hermes: no pr-cli at $prCli", e.message)
+        assertEquals("could not start a terminal for debian: no pr-cli at $prCli", e.message)
         assertTrue(started.isEmpty())
     }
 
     @Test
     fun aTerminalThatCannotStartIsReported() {
-        val e = assertThrows(IllegalStateException::class.java) { factory(session = null).startLogin("hermes") }
+        val e = assertThrows(IllegalStateException::class.java) { factory(session = null).startLogin("debian") }
 
-        assertEquals("could not start a terminal for hermes", e.message)
+        assertEquals("could not start a terminal for debian", e.message)
     }
 }
 ```
