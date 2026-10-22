@@ -1,0 +1,4 @@
+[submodule "vendor/pr"]
+	path = vendor/pr
+	url = https://github.com/oonid/pr.git
+	ignore = untracked
