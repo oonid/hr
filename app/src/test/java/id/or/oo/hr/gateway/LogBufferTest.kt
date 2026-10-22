@@ -223,7 +223,7 @@ class LogBufferTest {
 
     @Test
     fun aLongSequenceIsCappedAndTheTextAfterItKept() {
-        log.append("\u001b]" + "a".repeat(260) + "visible\n")
+        log.append("\u001b]" + "a".repeat(4_100) + "visible\n")
         log.append("\u001bP" + "b".repeat(255) + "\u0007shown\n")
         log.append("\u001b[" + "1".repeat(258) + "csi\n")
 
@@ -297,6 +297,91 @@ class LogBufferTest {
 
         small.append("\n")
         assertEquals(listOf("abcd"), small.snapshot())
+    }
+
+    @Test
+    fun aMarkInsideAKeyDoesNotSplitIt() {
+        val redacting = LogBuffer(secrets = { listOf(KEY) })
+        redacting.append("token " + KEY.take(20))
+        redacting.mark("Stopping")
+        redacting.append(KEY.drop(20) + " ok\n")
+
+        val lines = redacting.snapshot()
+        assertNoPartOfKey("mark", lines)
+        assertEquals(listOf("token ", "Stopping", "[redacted] ok"), lines)
+    }
+
+    @Test
+    fun aKeyPartEndedByALineIsRedacted() {
+        val redacting = LogBuffer(secrets = { listOf(KEY) })
+        redacting.append("k=" + KEY.take(30) + "\r\n")
+
+        assertEquals(listOf("k=[redacted]"), redacting.snapshot())
+    }
+
+    @Test
+    fun aKeyPartRedrawnByACarriageReturnIsRedacted() {
+        val redacting = LogBuffer(secrets = { listOf(KEY) })
+        redacting.append("k=" + KEY.take(30) + "\r" + KEY.drop(30) + "\n")
+
+        val lines = redacting.snapshot()
+        assertNoPartOfKey("redraw", lines)
+        assertEquals(listOf("[redacted]"), lines)
+    }
+
+    @Test
+    fun aKeyWrappedAcrossLinesIsRedactedInBoth() {
+        val redacting = LogBuffer(secrets = { listOf(KEY) })
+        redacting.append("k=" + KEY.take(40) + "\n" + KEY.drop(40) + " ok\n")
+
+        val lines = redacting.snapshot()
+        assertNoPartOfKey("wrapped", lines)
+        assertEquals(listOf("k=[redacted]", "[redacted] ok"), lines)
+    }
+
+    @Test
+    fun aKeyPartInTheLiveLineIsRedacted() {
+        val redacting = LogBuffer(secrets = { listOf(KEY) })
+        redacting.append("k=" + KEY.substring(10, 40))
+
+        assertEquals(listOf("k=[redacted]"), redacting.snapshot())
+    }
+
+    @Test
+    fun textWithoutKeyPartsIsUnchanged() {
+        val redacting = LogBuffer(secrets = { listOf(KEY, "0123456789ab") })
+        redacting.append("commit 3f9a0c7 merged, id deadbeef00112233 01234567\n")
+
+        assertEquals(listOf("commit 3f9a0c7 merged, id deadbeef00112233 01234567"), redacting.snapshot())
+    }
+
+    @Test
+    fun nestedKeysAreRedactedLongestFirst() {
+        val redacting = LogBuffer(secrets = { listOf("0123456789abcdef", "XXXXXXXX0123456789abcdef") })
+        redacting.append("a XXXXXXXX0123456789abcdef b\n")
+        redacting.mark("m XXXXXXXX0123456789abcdef")
+
+        assertEquals(listOf("a [redacted] b", "m [redacted]"), redacting.snapshot())
+    }
+
+    @Test
+    fun aShortTrailingKeyPrefixStaysVisible() {
+        val redacting = LogBuffer(secrets = { listOf(KEY) })
+        redacting.append("count 3")
+        assertEquals(listOf("count 3"), redacting.snapshot())
+
+        redacting.append("f9")
+        assertEquals(listOf("count 3f9"), redacting.snapshot())
+
+        redacting.append("a")
+        assertEquals(listOf("count "), redacting.snapshot())
+    }
+
+    @Test
+    fun aLongHyperlinkLeavesNoTail() {
+        log.append("\u001b]8;;https://example.org/" + "a".repeat(1_000) + "\u001b\\link\u001b]8;;\u001b\\\n")
+
+        assertEquals(listOf("link"), log.snapshot())
     }
 
     private fun assertNoPartOfKey(label: String, lines: List<String>) {
