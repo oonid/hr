@@ -49,7 +49,9 @@ class LogBuffer(
         val found = usable(secrets())
         synchronized(lock) {
             remember(found)
-            if (current.isNotEmpty()) endLine()
+            val open = current.length - trailingSecretPrefix()
+            if (open > 0) store(current.substring(0, open))
+            current.delete(0, open)
             mode = Mode.TEXT
             returned = false
             carry = ByteArray(0)
@@ -60,13 +62,14 @@ class LogBuffer(
     }
 
     fun snapshot(): List<String> = synchronized(lock) {
-        val live = cut(current.substring(0, current.length - trailingSecretPrefix()))
+        val live = cut(scrub(current.substring(0, current.length - trailingSecretPrefix())))
         if (live.isEmpty()) lines.toList() else lines.toList() + live
     }
 
     fun tail(count: Int): List<String> = snapshot().takeLast(count)
 
-    private fun usable(found: List<String>): List<String> = found.filter { it.length >= MIN_SECRET }.distinct()
+    private fun usable(found: List<String>): List<String> =
+        found.filter { it.length >= MIN_SECRET }.distinct().sortedByDescending { it.length }
 
     private fun remember(found: List<String>) {
         known = found
@@ -82,7 +85,8 @@ class LogBuffer(
             mode == Mode.TEXT -> text(c)
             else -> {
                 sequenceLength += 1
-                val next = if (sequenceLength > MAX_SEQUENCE || c == '\n') null else step(c)
+                val limit = if (mode == Mode.STRING) MAX_STRING else MAX_SEQUENCE
+                val next = if (sequenceLength > limit || c == '\n') null else step(c)
                 mode = next ?: Mode.TEXT
                 if (next == null) text(c)
             }
@@ -139,7 +143,7 @@ class LogBuffer(
     }
 
     private fun trailingSecretPrefix(): Int = known.maxOfOrNull { secret ->
-        (minOf(secret.length - 1, current.length) downTo 1).firstOrNull { size ->
+        (minOf(secret.length - 1, current.length) downTo MIN_HIDDEN).firstOrNull { size ->
             current.endsWith(secret.subSequence(0, size))
         } ?: 0
     } ?: 0
@@ -151,8 +155,32 @@ class LogBuffer(
     }
 
     private fun store(line: String) {
-        lines.addLast(cut(line))
+        lines.addLast(cut(scrub(line)))
         while (lines.size > maxLines) lines.removeFirst()
+    }
+
+    private fun scrub(line: String): String {
+        val keys = known.filter { it.length >= MIN_SCRUBBED }
+        if (keys.isEmpty()) return line
+        val out = StringBuilder()
+        var at = 0
+        while (at < line.length) {
+            val run = keys.maxOf { key -> key.indices.maxOf { start -> common(line, at, key, start) } }
+            if (run >= MIN_SECRET) {
+                out.append(REDACTED)
+                at += run
+            } else {
+                out.append(line[at])
+                at += 1
+            }
+        }
+        return out.toString()
+    }
+
+    private fun common(line: String, at: Int, key: String, start: Int): Int {
+        var size = 0
+        while (at + size < line.length && start + size < key.length && line[at + size] == key[start + size]) size += 1
+        return size
     }
 
     private fun cut(line: String): String {
@@ -164,7 +192,10 @@ class LogBuffer(
         const val MAX_LINES = 2_000
         const val MAX_LINE_CHARS = 2_000
         private const val MAX_SEQUENCE = 256
+        private const val MAX_STRING = 4_096
         private const val MIN_SECRET = 8
+        private const val MIN_HIDDEN = 4
+        private const val MIN_SCRUBBED = 16
         private const val REDACTED = "[redacted]"
         private const val ESC = '\u001b'
         private const val BEL = '\u0007'
