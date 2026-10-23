@@ -17,7 +17,6 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
@@ -25,30 +24,20 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LifecycleResumeEffect
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import id.or.oo.hr.HrApp
-import id.or.oo.pr.session.SessionService
 import id.or.oo.pr.session.isIgnoringBatteryOptimizations
 
 @Composable
 fun SessionBanners(app: HrApp) {
     val context = LocalContext.current
-    val running by app.sessions.running.collectAsState()
-    val keepAwake by app.sessions.keepCpuAwake.collectAsState()
-    val backgroundError by app.sessions.backgroundError.collectAsState()
+    val running by app.sessions.running.collectAsStateWithLifecycle()
+    val keepAwake by app.sessions.keepCpuAwake.collectAsStateWithLifecycle()
+    val backgroundError by app.sessions.backgroundError.collectAsStateWithLifecycle()
     val resumes = remember { mutableIntStateOf(0) }
-    val granted = remember { booleanArrayOf(context.canPostNotifications(), context.isIgnoringBatteryOptimizations()) }
     LifecycleResumeEffect(Unit) {
         resumes.intValue++
-        val notifications = context.canPostNotifications()
-        val exempt = context.isIgnoringBatteryOptimizations()
-        val newlyGranted = (notifications && !granted[0]) || (exempt && !granted[1])
-        if (newlyGranted && app.sessions.running.value.isNotEmpty()) {
-            ContextCompat.startForegroundService(context, Intent(context, SessionService::class.java))
-        }
-        granted[0] = notifications
-        granted[1] = exempt
         onPauseOrDispose {}
     }
     val exempt = remember(resumes.intValue, keepAwake) { context.isIgnoringBatteryOptimizations() }

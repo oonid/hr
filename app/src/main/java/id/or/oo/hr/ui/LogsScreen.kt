@@ -9,21 +9,24 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import id.or.oo.hr.HrApp
 
 @Composable
 fun LogsScreen(app: HrApp, modifier: Modifier) {
-    val revision by app.gatewayLog.revision.collectAsState()
+    val revision by app.gatewayLog.revision.collectAsStateWithLifecycle()
     val lines = remember(revision) { app.gatewayLog.snapshot() }
     val list = rememberLazyListState()
-    LaunchedEffect(lines.size) {
-        if (lines.isNotEmpty()) list.scrollToItem(lines.lastIndex)
+    LaunchedEffect(lines) {
+        val info = list.layoutInfo
+        val last = info.visibleItemsInfo.lastOrNull()?.index ?: -1
+        val following = info.totalItemsCount == 0 || last >= info.totalItemsCount - 2
+        if (following && lines.isNotEmpty()) list.scrollToItem(lines.lastIndex)
     }
     if (lines.isEmpty()) {
         Text("The gateway has not written anything yet.", modifier = modifier.padding(12.dp))

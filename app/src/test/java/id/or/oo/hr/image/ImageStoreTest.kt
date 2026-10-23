@@ -169,6 +169,38 @@ class ImageStoreTest {
     }
 
     @Test
+    fun busyIsTrueOnlyWhileAnOperationRuns() {
+        val store = store()
+        assertFalse(store.busy)
+        gate = CompletableDeferred()
+
+        store.install()
+        assertTrue(store.busy)
+        gate!!.complete(Unit)
+        store.awaitIdle()
+
+        assertFalse(store.busy)
+    }
+
+    @Test
+    fun containerPresentFollowsInstallRemoveAndRefresh() {
+        val store = store()
+        assertFalse(store.containerPresent.value)
+
+        store.install()
+        store.awaitIdle()
+        assertTrue(store.containerPresent.value)
+
+        files.containerDir("hermes").deleteRecursively()
+        store.refresh()
+        assertFalse(store.containerPresent.value)
+
+        files.rootfs("hermes").mkdirs()
+        store.refresh()
+        assertTrue(store.containerPresent.value)
+    }
+
+    @Test
     fun aRecordWithoutItsContainerReadsAsNotInstalled() {
         val store = store()
         store.install()

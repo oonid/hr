@@ -14,34 +14,41 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.produceState
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import id.or.oo.hr.Hermes
 import id.or.oo.hr.HrApp
 import id.or.oo.hr.gateway.GatewayState
 import id.or.oo.hr.gateway.describe
 import id.or.oo.hr.image.ImageStore
 import id.or.oo.hr.image.InstalledImage
+import id.or.oo.hr.image.canStartSession
 import kotlinx.coroutines.delay
 
 @Composable
 fun HomeScreen(app: HrApp, actions: HrActions, modifier: Modifier, open: (Screen) -> Unit) {
-    val installed by app.images.installed.collectAsState()
-    val operation by app.images.operation.collectAsState()
-    val state by app.gateway.state.collectAsState()
-    val revision by app.gatewayLog.revision.collectAsState()
+    val installed by app.images.installed.collectAsStateWithLifecycle()
+    val operation by app.images.operation.collectAsStateWithLifecycle()
+    val state by app.gateway.state.collectAsStateWithLifecycle()
+    val revision by app.gatewayLog.revision.collectAsStateWithLifecycle()
     val recent = remember(revision) { app.gatewayLog.tail(RECENT_LINES) }
-    val now by produceState(System.currentTimeMillis()) {
+    val ticking = state is GatewayState.Starting || state is GatewayState.Running
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(ticking) {
         while (true) {
+            now = System.currentTimeMillis()
+            if (!ticking) break
             delay(1_000)
-            value = System.currentTimeMillis()
         }
     }
+    val canStart = canStartSession(operation)
 
     Column(
         modifier = modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(12.dp),
@@ -49,7 +56,7 @@ fun HomeScreen(app: HrApp, actions: HrActions, modifier: Modifier, open: (Screen
     ) {
         ImageCard(installed, operation, onInstall = { app.images.install() }, onDismiss = { app.images.dismiss() })
         if (installed != null) {
-            GatewayCard(state, now, onStart = actions.startGateway, onStop = { app.gateway.stop() })
+            GatewayCard(state, now, canStart, onStart = actions.startGateway, onStop = { app.gateway.stop() })
         }
         SessionBanners(app)
         if (recent.isNotEmpty()) {
@@ -62,7 +69,7 @@ fun HomeScreen(app: HrApp, actions: HrActions, modifier: Modifier, open: (Screen
             }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Button(onClick = actions.openTerminal, enabled = installed != null) { Text("Terminal") }
+            Button(onClick = actions.openTerminal, enabled = installed != null && canStart) { Text("Terminal") }
             OutlinedButton(onClick = { open(Screen.Settings) }) { Text("Settings") }
         }
     }
@@ -81,7 +88,7 @@ private fun ImageCard(
             if (installed != null) {
                 Text(installed.buildTag)
             } else {
-                Text("Hermes is not installed. The ${Hermes.PULL_TAG} image downloads about 255 MB and takes about 750 MB.")
+                Text("Hermes is not installed. The ${Hermes.PULL_TAG} image is a download of a few hundred MB.")
             }
             operation?.let { current ->
                 LogLines(current.lines.takeLast(RECENT_LINES))
@@ -95,7 +102,7 @@ private fun ImageCard(
 }
 
 @Composable
-private fun GatewayCard(state: GatewayState, now: Long, onStart: () -> Unit, onStop: () -> Unit) {
+private fun GatewayCard(state: GatewayState, now: Long, canStart: Boolean, onStart: () -> Unit, onStop: () -> Unit) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(12.dp)) {
             Text("Gateway", style = MaterialTheme.typography.titleSmall)
@@ -108,8 +115,8 @@ private fun GatewayCard(state: GatewayState, now: Long, onStart: () -> Unit, onS
             when (state) {
                 is GatewayState.Starting, is GatewayState.Running -> Button(onClick = onStop) { Text("Stop") }
                 GatewayState.Stopping -> Button(onClick = {}, enabled = false) { Text("Stopping…") }
-                is GatewayState.StoppedUnexpectedly -> Button(onClick = onStart) { Text("Restart") }
-                is GatewayState.Stopped, is GatewayState.Failed -> Button(onClick = onStart) { Text("Start") }
+                is GatewayState.StoppedUnexpectedly -> Button(onClick = onStart, enabled = canStart) { Text("Restart") }
+                is GatewayState.Stopped, is GatewayState.Failed -> Button(onClick = onStart, enabled = canStart) { Text("Start") }
             }
         }
     }

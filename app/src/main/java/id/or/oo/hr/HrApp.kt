@@ -9,6 +9,7 @@ import id.or.oo.hr.gateway.LocalGatewayProbe
 import id.or.oo.hr.gateway.LogBuffer
 import id.or.oo.hr.image.GhcrRegistry
 import id.or.oo.hr.image.ImageStore
+import id.or.oo.hr.image.imageInUse
 import id.or.oo.hr.image.UrlHttp
 import id.or.oo.hr.profile.ProfileStore
 import id.or.oo.pr.engine.NetworkDns
@@ -78,7 +79,7 @@ class HrApp : Application(), ProotHost, SessionHost {
             GhcrRegistry(UrlHttp()),
             files,
             imageScope,
-            inUse = { sessions.running.value.isNotEmpty() },
+            inUse = { imageInUse(sessions.running.value.isNotEmpty(), gateway.state.value) },
         )
     }
 
@@ -100,6 +101,7 @@ class HrApp : Application(), ProotHost, SessionHost {
     }
 
     private fun prepareGateway(): SessionManager.SessionFactory {
+        check(!images.busy) { "wait for the image operation to finish" }
         check(images.installed.value != null) { "install the Hermes image first" }
         profiles.writeRootEnv(files.rootfs(Hermes.CONTAINER))
         return CommandSessionFactory(

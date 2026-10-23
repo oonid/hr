@@ -21,19 +21,22 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LifecycleResumeEffect
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import id.or.oo.hr.HrApp
 import id.or.oo.hr.image.ImageStore
+import id.or.oo.hr.image.canRemoveImage
+import id.or.oo.hr.image.imageInUse
 import id.or.oo.pr.session.isIgnoringBatteryOptimizations
 import java.text.DateFormat
 import java.util.Date
@@ -48,10 +51,13 @@ fun SettingsScreen(app: HrApp, actions: HrActions, modifier: Modifier) {
     }
     val notifications = remember(resumes.intValue) { context.canPostNotifications() }
     val exempt = remember(resumes.intValue) { context.isIgnoringBatteryOptimizations() }
-    val installed by app.images.installed.collectAsState()
-    val operation by app.images.operation.collectAsState()
-    val running by app.sessions.running.collectAsState()
-    var confirmRemove by remember { mutableStateOf(false) }
+    val installed by app.images.installed.collectAsStateWithLifecycle()
+    val operation by app.images.operation.collectAsStateWithLifecycle()
+    val running by app.sessions.running.collectAsStateWithLifecycle()
+    val gateway by app.gateway.state.collectAsStateWithLifecycle()
+    val containerPresent by app.images.containerPresent.collectAsStateWithLifecycle()
+    val inUse = imageInUse(running.isNotEmpty(), gateway)
+    var confirmRemove by rememberSaveable { mutableStateOf(false) }
 
     Column(
         modifier = modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(12.dp),
@@ -79,12 +85,12 @@ fun SettingsScreen(app: HrApp, actions: HrActions, modifier: Modifier) {
                 Text("Installed ${DateFormat.getDateTimeInstance().format(Date(image.installedAt))}")
             }
             operation?.takeIf { it.kind == ImageStore.Kind.Remove }?.let { LogLines(it.lines) }
-            if (app.images.containerExists) {
+            if (containerPresent) {
                 OutlinedButton(
                     onClick = { confirmRemove = true },
-                    enabled = running.isEmpty() && operation?.running != true,
+                    enabled = canRemoveImage(inUse, operation),
                 ) { Text("Remove image") }
-                if (running.isNotEmpty()) Text("Stop the gateway and end the terminal to remove the image.")
+                if (inUse) Text("Stop the gateway and end the terminal to remove the image.")
             }
         }
     }

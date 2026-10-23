@@ -11,6 +11,13 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
+import id.or.oo.hr.image.GrantWatcher
+import id.or.oo.hr.image.canStartSession
+import id.or.oo.hr.ui.canPostNotifications
+import id.or.oo.pr.session.isIgnoringBatteryOptimizations
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import id.or.oo.hr.ui.HrActions
 import id.or.oo.hr.ui.HrScreens
 import id.or.oo.hr.ui.HrTheme
@@ -19,6 +26,8 @@ import id.or.oo.pr.session.SessionService
 class MainActivity : ComponentActivity() {
 
     private val app: HrApp get() = application as HrApp
+
+    private lateinit var grants: GrantWatcher
 
     private val notificationPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -30,14 +39,19 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        grants = GrantWatcher(canPostNotifications(), isIgnoringBatteryOptimizations())
         val actions = HrActions(
             startGateway = {
-                askNotificationsOnce()
-                app.gateway.start()
+                if (canStartSession(app.images.operation.value)) {
+                    askNotificationsOnce()
+                    app.gateway.start()
+                }
             },
             openTerminal = {
-                askNotificationsOnce()
-                startActivity(Intent(this, TerminalActivity::class.java))
+                if (canStartSession(app.images.operation.value)) {
+                    askNotificationsOnce()
+                    startActivity(Intent(this, TerminalActivity::class.java))
+                }
             },
             askNotifications = ::askNotifications,
         )
@@ -46,7 +60,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        app.images.refresh()
+        if (!app.images.busy) lifecycleScope.launch(Dispatchers.IO) { app.images.refresh() }
+        val granted = grants.update(canPostNotifications(), isIgnoringBatteryOptimizations())
+        if (granted && app.sessions.running.value.isNotEmpty()) {
+            ContextCompat.startForegroundService(this, Intent(this, SessionService::class.java))
+        }
     }
 
     private fun askNotifications() {
