@@ -44,7 +44,7 @@ class ImageStore(
         get() = _containerPresent.value
 
     val busy: Boolean
-        get() = _operation.value?.running == true
+        get() = synchronized(lock) { _operation.value?.running == true }
 
     fun install(): Boolean = synchronized(lock) {
         if (_installed.value != null) return false

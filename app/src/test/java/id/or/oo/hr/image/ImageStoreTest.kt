@@ -183,6 +183,36 @@ class ImageStoreTest {
     }
 
     @Test
+    fun aStartThatLandsDuringTheInUseCheckSeesTheRemoveAsBusy() {
+        val seen = CompletableDeferred<Boolean>()
+        val startRefused = java.util.concurrent.atomic.AtomicBoolean(false)
+        lateinit var store: ImageStore
+        var first = true
+        store = ImageStore(command, { registry.resolve(it) }, files, scope, {
+            if (first) {
+                first = false
+                Thread {
+                    startRefused.set(store.busy)
+                    seen.complete(true)
+                }.start()
+                Thread.sleep(300)
+            }
+            false
+        }, clock = { 1_700_000_000_000 })
+        store.install()
+        store.awaitIdle()
+        gate = CompletableDeferred()
+
+        val removeProceeded = store.remove()
+        kotlinx.coroutines.runBlocking { seen.await() }
+
+        assertTrue(removeProceeded)
+        assertTrue(startRefused.get())
+        gate!!.complete(Unit)
+        store.awaitIdle()
+    }
+
+    @Test
     fun containerPresentFollowsInstallRemoveAndRefresh() {
         val store = store()
         assertFalse(store.containerPresent.value)
