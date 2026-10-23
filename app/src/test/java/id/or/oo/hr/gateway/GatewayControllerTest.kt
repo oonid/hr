@@ -10,6 +10,7 @@ import id.or.oo.pr.session.eventually
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
@@ -22,6 +23,7 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -412,6 +414,77 @@ class GatewayControllerTest {
 
         eventually { (controller.state.value as? GatewayState.Failed)?.reason?.contains("could not create the profile directory") == true }
         assertEquals(0, prepared.get())
+    }
+
+    @Test
+    fun blockingCallsDoNotHoldTheScopesThread() {
+        val executor = Executors.newSingleThreadExecutor()
+        val single = CoroutineScope(SupervisorJob() + executor.asCoroutineDispatcher())
+        val gate = CountDownLatch(1)
+        probe.gate = gate
+        val onSingle = GatewayController(sessions, { prepare() }, probe, profile, log, single, pollMs = 10)
+        try {
+            onSingle.start()
+            eventually { probe.healthChecks.get() >= 1 }
+            val ran = AtomicInteger()
+
+            single.launch { ran.incrementAndGet() }
+
+            eventually { ran.get() == 1 }
+        } finally {
+            gate.countDown()
+            single.cancel()
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
+    fun aCrashGoesStraightToStoppedUnexpectedly() {
+        val seen = CopyOnWriteArrayList<GatewayState>()
+        scope.launch(Dispatchers.Unconfined) { controller.state.collect { seen += it } }
+        probe.health = Health("v0.22.3")
+        controller.start()
+        eventually { controller.state.value is GatewayState.Running }
+
+        ptys.single().fake.exit(70)
+
+        eventually { controller.state.value is GatewayState.StoppedUnexpectedly }
+        assertTrue(seen.none { it == GatewayState.Stopping })
+    }
+
+    @Test
+    fun cancellingTheScopeDuringPrepareDoesNotSettleFailed() {
+        val inPrepare = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val factory = prepare
+        prepare = {
+            inPrepare.countDown()
+            release.await(5, TimeUnit.SECONDS)
+            factory()
+        }
+        controller.start()
+        assertTrue(inPrepare.await(5, TimeUnit.SECONDS))
+
+        scope.cancel()
+        release.countDown()
+        Thread.sleep(200)
+
+        assertEquals(GatewayState.Starting(1_000), controller.state.value)
+    }
+
+    @Test
+    fun aGatewayStillEndingIsNotReportedAsAnotherAppsGateway() {
+        val pending = mutableListOf(draining())
+        nextPty = { pending.removeFirstOrNull() ?: GatewayPty() }
+        val factory = prepare()
+        sessions.open("hermes-gateway", factory)
+        prepare = { factory }
+        sessions.end("hermes-gateway")
+        probe.busy = true
+
+        controller.start()
+
+        eventually { ptys.size == 2 && sessions.running.value == listOf("hermes-gateway") }
     }
 
     @Test
