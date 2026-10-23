@@ -1,0 +1,124 @@
+package id.or.oo.hr.ui
+
+import android.Manifest
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
+import android.provider.Settings
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.LifecycleResumeEffect
+import id.or.oo.hr.HrApp
+import id.or.oo.hr.image.ImageStore
+import id.or.oo.pr.session.isIgnoringBatteryOptimizations
+import java.text.DateFormat
+import java.util.Date
+
+@Composable
+fun SettingsScreen(app: HrApp, actions: HrActions, modifier: Modifier) {
+    val context = LocalContext.current
+    val resumes = remember { mutableIntStateOf(0) }
+    LifecycleResumeEffect(Unit) {
+        resumes.intValue++
+        onPauseOrDispose {}
+    }
+    val notifications = remember(resumes.intValue) { context.canPostNotifications() }
+    val exempt = remember(resumes.intValue) { context.isIgnoringBatteryOptimizations() }
+    val installed by app.images.installed.collectAsState()
+    val operation by app.images.operation.collectAsState()
+    val running by app.sessions.running.collectAsState()
+    var confirmRemove by remember { mutableStateOf(false) }
+
+    Column(
+        modifier = modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Section("Notifications") {
+            Text(if (notifications) "Allowed" else "Not allowed: hr cannot tell you when the gateway stops.")
+            if (!notifications) {
+                Row {
+                    Button(onClick = actions.askNotifications) { Text("Allow") }
+                    TextButton(onClick = { context.openNotificationSettings() }) { Text("Open settings") }
+                }
+            }
+        }
+        Section("Battery") {
+            Text(if (exempt) "Unrestricted" else "Optimised: some phones stop background apps that are not exempt.")
+            if (!exempt) Button(onClick = { context.requestBatteryExemption() }) { Text("Allow unrestricted") }
+        }
+        Section("Hermes image") {
+            val image = installed
+            if (image == null) {
+                Text("Not installed")
+            } else {
+                Text(image.reference)
+                Text("Installed ${DateFormat.getDateTimeInstance().format(Date(image.installedAt))}")
+            }
+            operation?.takeIf { it.kind == ImageStore.Kind.Remove }?.let { LogLines(it.lines) }
+            if (app.images.containerExists) {
+                OutlinedButton(
+                    onClick = { confirmRemove = true },
+                    enabled = running.isEmpty() && operation?.running != true,
+                ) { Text("Remove image") }
+                if (running.isNotEmpty()) Text("Stop the gateway and end the terminal to remove the image.")
+            }
+        }
+    }
+
+    if (confirmRemove) {
+        AlertDialog(
+            onDismissRequest = { confirmRemove = false },
+            title = { Text("Remove the Hermes image?") },
+            text = { Text("The container is deleted. Your profile (config, keys, sessions, memories) stays in hr's files.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmRemove = false
+                    app.images.remove()
+                }) { Text("Remove") }
+            },
+            dismissButton = { TextButton(onClick = { confirmRemove = false }) { Text("Cancel") } },
+        )
+    }
+}
+
+@Composable
+private fun Section(title: String, content: @Composable () -> Unit) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text(title, style = MaterialTheme.typography.titleSmall)
+            content()
+        }
+    }
+}
+
+fun Context.canPostNotifications(): Boolean =
+    Build.VERSION.SDK_INT < 33 ||
+        ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+
+private fun Context.openNotificationSettings() {
+    startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName))
+}
