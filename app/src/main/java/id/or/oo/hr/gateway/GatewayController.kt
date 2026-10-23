@@ -72,12 +72,15 @@ class GatewayController(
     }
 
     private suspend fun run(since: Long) {
-        if (io { probe.portInUse() }) return settle(GatewayState.Failed(PORT_IN_USE))
+        val ending = Hermes.GATEWAY_KEY in sessions.ending.value
+        if (!ending && io { probe.portInUse() }) return settle(GatewayState.Failed(PORT_IN_USE))
         val factory = try {
             io {
                 profile.ensureProfile()
                 launch.prepare()
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             return settle(GatewayState.Failed(e.message ?: e.javaClass.simpleName))
         }
@@ -117,7 +120,7 @@ class GatewayController(
         }
         sessions.ending.combine(session.exit) { ending, exit -> exit != null || Hermes.GATEWAY_KEY in ending }
             .first { it }
-        markStopping()
+        if (session.exit.value == null) markStopping()
         val exit = withTimeoutOrNull(endTimeoutMs) { session.exit.filterNotNull().first() }
         ready.cancel()
         settle(
