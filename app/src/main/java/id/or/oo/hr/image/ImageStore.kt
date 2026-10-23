@@ -37,8 +37,14 @@ class ImageStore(
     private val _operation = MutableStateFlow<Operation?>(null)
     val operation: StateFlow<Operation?> = _operation
 
+    private val _containerPresent = MutableStateFlow(containerOnDisk())
+    val containerPresent: StateFlow<Boolean> = _containerPresent
+
     val containerExists: Boolean
-        get() = files.containerDir(Hermes.CONTAINER).exists()
+        get() = _containerPresent.value
+
+    val busy: Boolean
+        get() = _operation.value?.running == true
 
     fun install(): Boolean = synchronized(lock) {
         if (_installed.value != null) return false
@@ -62,7 +68,10 @@ class ImageStore(
 
     fun refresh() {
         _installed.value = load()
+        _containerPresent.value = containerOnDisk()
     }
+
+    private fun containerOnDisk(): Boolean = files.containerDir(Hermes.CONTAINER).exists()
 
     private fun start(kind: Kind, work: suspend () -> Boolean): Boolean {
         if (_operation.value?.running == true) return false
@@ -74,6 +83,7 @@ class ImageStore(
                 append("ERROR: ${e.message ?: e.javaClass.simpleName}")
                 false
             }
+            _containerPresent.value = containerOnDisk()
             _operation.update { it?.copy(running = false, succeeded = succeeded) }
         }
         return true
