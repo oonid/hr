@@ -11,6 +11,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -36,12 +38,16 @@ class GatewayControllerTest {
     private class FakeProbe : GatewayProbe {
         @Volatile var busy = false
         @Volatile var health: Health? = null
+        @Volatile var failure: RuntimeException? = null
+        @Volatile var gate: CountDownLatch? = null
         val healthChecks = AtomicInteger()
 
         override fun portInUse(): Boolean = busy
 
         override fun health(): Health? {
             healthChecks.incrementAndGet()
+            failure?.let { throw it }
+            gate?.await(5, TimeUnit.SECONDS)
             return health
         }
     }
@@ -80,6 +86,7 @@ class GatewayControllerTest {
         }
     }
     private var now = 1_000L
+    private var endTimeout = 60_000L
 
     private val controller by lazy {
         GatewayController(
@@ -91,6 +98,7 @@ class GatewayControllerTest {
             scope,
             clock = { now },
             pollMs = 10,
+            endTimeoutMs = endTimeout,
         )
     }
 
@@ -132,7 +140,6 @@ class GatewayControllerTest {
 
         assertTrue(controller.stop())
 
-        assertEquals(GatewayState.Stopping, controller.state.value)
         eventually { controller.state.value == GatewayState.Stopped(1) }
         assertEquals(listOf("signal", "close"), ptys.single().fake.calls)
         assertTrue(sessions.running.value.isEmpty())
@@ -211,13 +218,123 @@ class GatewayControllerTest {
 
     @Test
     fun stopWhileStartingWinsOverALaterHealthAnswer() {
+        nextPty = { draining() }
+        val gate = CountDownLatch(1)
+        probe.gate = gate
+        probe.health = Health("v0.22.3")
+        val seen = CopyOnWriteArrayList<GatewayState>()
+        scope.launch(Dispatchers.Unconfined) { controller.state.collect { seen += it } }
+        controller.start()
+        eventually { probe.healthChecks.get() >= 1 }
+
+        controller.stop()
+        gate.countDown()
+
+        eventually { controller.state.value == GatewayState.Stopping }
+        val checks = probe.healthChecks.get()
+        Thread.sleep(100)
+        assertEquals(GatewayState.Stopping, controller.state.value)
+        assertEquals(checks, probe.healthChecks.get())
+        assertTrue(seen.none { it is GatewayState.Running })
+        eventually { controller.state.value == GatewayState.Stopped(0) }
+    }
+
+    @Test
+    fun healthPollingStopsOnceTheGatewayIsStopping() {
+        nextPty = { draining() }
+        controller.start()
+        eventually { probe.healthChecks.get() >= 3 }
+
+        controller.stop()
+
+        eventually { controller.state.value == GatewayState.Stopping }
+        Thread.sleep(50)
+        val checks = probe.healthChecks.get()
+        Thread.sleep(100)
+        assertEquals(checks, probe.healthChecks.get())
+    }
+
+    @Test
+    fun anEndFromOutsideShowsStoppingWhileRunning() {
+        nextPty = { draining() }
+        probe.health = Health("v0.22.3")
+        controller.start()
+        eventually { controller.state.value is GatewayState.Running }
+
+        sessions.endAll()
+
+        eventually { controller.state.value == GatewayState.Stopping }
+        eventually { controller.state.value is GatewayState.Stopped }
+        assertTrue(ended.isEmpty())
+    }
+
+    @Test
+    fun anEndFromOutsideShowsStoppingWhileStarting() {
+        nextPty = { draining() }
         controller.start()
         eventually { ptys.size == 1 }
 
-        controller.stop()
-        probe.health = Health("v0.22.3")
+        sessions.endAll()
 
-        eventually { controller.state.value == GatewayState.Stopped(1) }
+        eventually { controller.state.value == GatewayState.Stopping }
+        probe.health = Health("v0.22.3")
+        Thread.sleep(100)
+        assertTrue(controller.state.value != GatewayState.Running(1_000, "v0.22.3"))
+        eventually { controller.state.value is GatewayState.Stopped }
+    }
+
+    @Test
+    fun aGatewayThatDoesNotExitInTimeFailsTheStop() {
+        endTimeout = 100
+        nextPty = { GatewayPty(FakePty().apply { ignoresEof = true }, sigtermExit = null) }
+        probe.health = Health("v0.22.3")
+        controller.start()
+        eventually { controller.state.value is GatewayState.Running }
+
+        controller.stop()
+
+        eventually { controller.state.value == GatewayState.Failed(GatewayController.CANNOT_STOP) }
+    }
+
+    @Test
+    fun aStartWaitsForThePreviousSessionToEndThenOpensAgain() {
+        val pending = mutableListOf(draining())
+        nextPty = { pending.removeFirstOrNull() ?: GatewayPty() }
+        val factory = prepare()
+        sessions.open("hermes-gateway", factory)
+        prepare = { factory }
+        sessions.end("hermes-gateway")
+        assertTrue(sessions.ending.value.isNotEmpty())
+
+        assertTrue(controller.start())
+
+        eventually { ptys.size == 2 && sessions.running.value == listOf("hermes-gateway") }
+        assertTrue(controller.state.value is GatewayState.Starting)
+    }
+
+    @Test
+    fun aStartThatTheEndingSessionOutlastsFails() {
+        endTimeout = 100
+        nextPty = { GatewayPty(FakePty().apply { ignoresEof = true }, sigtermExit = null) }
+        val factory = prepare()
+        sessions.open("hermes-gateway", factory)
+        prepare = { factory }
+        sessions.end("hermes-gateway")
+
+        controller.start()
+
+        eventually { controller.state.value == GatewayState.Failed(GatewayController.CANNOT_STOP) }
+        assertEquals(1, ptys.size)
+    }
+
+    @Test
+    fun aProbeThatThrowsFailsTheStartAndEndsTheSession() {
+        probe.failure = IllegalStateException("probe broke")
+
+        controller.start()
+
+        eventually { controller.state.value == GatewayState.Failed("probe broke") }
+        eventually { sessions.running.value.isEmpty() }
     }
 
     @Test
@@ -302,6 +419,8 @@ class GatewayControllerTest {
         assertFalse(controller.stop())
         assertEquals(GatewayState.Stopped(), controller.state.value)
     }
+
+    private fun draining() = GatewayPty(FakePty(), sigtermExit = null)
 
     private companion object {
         const val GATEWAY_PID = 1810
