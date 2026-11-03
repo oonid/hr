@@ -26,7 +26,7 @@ git submodule update --init vendor/pr
 git -C vendor/pr submodule update --init vendor/termlib
 ```
 
-Do not use `--recursive`: pr's other submodules (proot, busybox, musl, bionic, samba) are only
+Do not use `--recursive`: pr's other submodules (proot, musl, bionic, samba) are only
 needed to rebuild its native binaries, which `:proot-engine` ships prebuilt, and several of their
 URLs are SSH-only. `settings.gradle.kts` finds pr at `-PprRoot=<path>`, then `vendor/pr`, then
 `../pr.oo.or.id`.
