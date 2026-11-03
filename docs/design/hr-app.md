@@ -28,7 +28,7 @@ the generic app oonid/pr.
   marked "currently broken" and best-effort; upstream `install.sh` refuses Termux. Updating Hermes
   in place on a phone is fragile (`hermes update` builds Rust and gets killed), which is why hr
   updates by installing a newer image.
-- **oonid/pr:** its `:proot-engine` (proot, pr-cli, busybox, PTY) and `:termlib` (terminal) are
+- **oonid/pr:** its `:proot-engine` (proot, pr-cli, PTY) and `:termlib` (terminal) are
   generic modules, already reused by rs.oo.or.id. pr-cli can bind-mount host directories
   (`login --custom-bind host:guest`) and run a command (`login <alias> -- '<cmd>'`). Its
   background-session code (sessions, foreground service, End and drain, notifications, `/proc`
