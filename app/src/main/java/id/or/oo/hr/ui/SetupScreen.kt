@@ -1,5 +1,6 @@
 package id.or.oo.hr.ui
 
+import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.Intent
 import android.net.Uri
@@ -95,9 +96,16 @@ private fun Waiting(login: LoginState.Waiting, controller: SetupController) {
     val context = LocalContext.current
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
+    var noBrowser by remember { mutableStateOf(false) }
     Button(onClick = {
-        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(login.url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        val view = Intent(Intent.ACTION_VIEW, Uri.parse(login.url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        try {
+            context.startActivity(view)
+        } catch (e: ActivityNotFoundException) {
+            noBrowser = true
+        }
     }) { Text("Open ${login.url}") }
+    if (noBrowser) Text("No browser found. Open ${login.url} on another device and enter the code.")
     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(login.code, fontFamily = FontFamily.Monospace, fontSize = 28.sp)
         OutlinedButton(onClick = {
