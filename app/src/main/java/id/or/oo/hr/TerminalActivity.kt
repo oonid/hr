@@ -8,14 +8,20 @@ import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -62,7 +68,28 @@ class TerminalActivity : ComponentActivity() {
                 if (current == null || current.exit.value != null) finish() else showLeavePrompt.value = true
             }
         })
-        open()
+        when (terminalStart(restored = savedInstanceState != null, sessionOpen = sessions.isOpen(Hermes.TERMINAL_KEY))) {
+            TerminalStart.SHOW_ENDED -> showEndedWhileStopped()
+            TerminalStart.OPEN -> open()
+        }
+    }
+
+    private fun showEndedWhileStopped() {
+        setContent {
+            MaterialTheme {
+                Surface(modifier = Modifier.fillMaxSize(), color = TERMINAL_BACKGROUND) {
+                    Column(
+                        modifier = Modifier.fillMaxSize().padding(24.dp),
+                        verticalArrangement = Arrangement.Center,
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Text("The terminal ended when hr was stopped.", color = Color.White)
+                        Spacer(Modifier.height(16.dp))
+                        Button(onClick = { open() }) { Text("Start a new terminal") }
+                    }
+                }
+            }
+        }
     }
 
     private fun open() {
@@ -107,7 +134,7 @@ class TerminalActivity : ComponentActivity() {
                     Box(modifier = Modifier.fillMaxSize()) {
                         Terminal(
                             terminalEmulator = current.emulator!!,
-                            modifier = Modifier.fillMaxSize().systemBarsPadding(),
+                            modifier = Modifier.fillMaxSize().systemBarsPadding().imePadding(),
                             initialFontSize = 12.sp,
                             backgroundColor = TERMINAL_BACKGROUND,
                             foregroundColor = Color.White,
