@@ -102,4 +102,16 @@ class ProfileSettingsTest {
             runBlocking { settings(0, CancellationException("stop")).useModel("p", "m") }
         }
     }
+
+    @Test
+    fun aValueStartingWithADashIsRefused() = runBlocking {
+        val model = settings().useModel("p", "--help")
+        val provider = settings().useModel("-x", "m")
+        val url = settings().useModel("p", "m", "-x")
+
+        assertTrue(model.exceptionOrNull() is IllegalArgumentException)
+        assertTrue(provider.exceptionOrNull() is IllegalArgumentException)
+        assertTrue(url.exceptionOrNull() is IllegalArgumentException)
+        assertTrue(scripts.isEmpty())
+    }
 }

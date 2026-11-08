@@ -2,6 +2,7 @@ package id.or.oo.hr.setup
 
 import kotlinx.coroutines.CancellationException
 import org.json.JSONArray
+import org.json.JSONException
 
 const val CODEX_MODELS_SCRIPT =
     "V=\$(ls -d /root/.hermes/installs/*/environments/*/venv | head -1); " +
@@ -32,7 +33,7 @@ class ModelCatalog(private val command: HermesCommand) {
         val array = JSONArray(text)
         (0 until array.length()).map { index -> array.get(index) as? String ?: return null }
             .takeIf { it.isNotEmpty() }
-    } catch (e: org.json.JSONException) {
+    } catch (e: JSONException) {
         null
     }
 }
