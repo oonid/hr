@@ -1,0 +1,152 @@
+package id.or.oo.hr.setup
+
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+fun interface GatewayRestart {
+    suspend fun restart(): String?
+}
+
+sealed interface SetupStep {
+    data object Choose : SetupStep
+    data class ChatGpt(val login: LoginState, val models: List<String>?, val loadingModels: Boolean) : SetupStep
+    data object Saving : SetupStep
+    data object Testing : SetupStep
+    data class Saved(val what: String) : SetupStep
+    data class Done(val result: TestResult) : SetupStep
+    data class Error(val reason: String) : SetupStep
+}
+
+class SetupController(
+    private val login: CodexLogin,
+    private val catalog: ModelCatalog,
+    private val settings: ProfileSettings,
+    private val request: TestRequest,
+    private val restart: GatewayRestart,
+    private val configured: () -> Boolean,
+    private val scope: CoroutineScope,
+    private val io: CoroutineDispatcher = Dispatchers.IO,
+) {
+    private val lock = Any()
+    private var job: Job? = null
+    private val mutableStep = MutableStateFlow<SetupStep>(SetupStep.Choose)
+
+    val step: StateFlow<SetupStep> = mutableStep
+
+    fun chooseChatGpt() = begin({ SetupStep.ChatGpt(login.state.value, null, false) }) { followLogin(it) }
+
+    fun cancelLogin() = login.cancel()
+
+    fun saveCodexModel(model: String) = begin({ SetupStep.Saving }) { me ->
+        save(me, false) { settings.useModel(CODEX, model) }
+    }
+
+    fun chooseApiKey(provider: ApiProvider, key: String, model: String, baseUrl: String?) =
+        begin({ SetupStep.Saving }) { me -> save(me, false) { settings.useApiKey(provider, key, model, baseUrl) } }
+
+    fun saveTelegram(token: String, allowedUsers: String) = begin({ SetupStep.Saving }) { me ->
+        save(me, true) { settings.useTelegram(token, allowedUsers) }
+    }
+
+    fun test() = begin({ SetupStep.Testing }) { me ->
+        if (withContext(io) { configured() }) runTest(me) else settle(me, SetupStep.Error(NO_PROVIDER))
+    }
+
+    fun back() {
+        val wasChatGpt = synchronized(lock) {
+            val current = mutableStep.value
+            if (current.busy) return
+            job?.cancel()
+            job = null
+            mutableStep.value = SetupStep.Choose
+            current is SetupStep.ChatGpt
+        }
+        if (wasChatGpt) login.cancel()
+    }
+
+    private fun begin(first: () -> SetupStep, work: suspend (Job) -> Unit) {
+        synchronized(lock) {
+            if (mutableStep.value.busy) return
+            job?.cancel()
+            mutableStep.value = first()
+            val next = scope.launch(start = CoroutineStart.LAZY) {
+                val me = coroutineContext[Job]!!
+                try {
+                    work(me)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    settle(me, SetupStep.Error(e.message ?: e.javaClass.simpleName))
+                }
+            }
+            job = next
+            next.start()
+        }
+    }
+
+    private suspend fun followLogin(me: Job) {
+        if (login.check()) {
+            onChatGpt(me) { it.copy(login = LoginState.LoggedIn) }
+        } else {
+            synchronized(lock) {
+                if (job !== me) return
+                login.start()
+            }
+            login.state.first { state ->
+                onChatGpt(me) { it.copy(login = state) }
+                state == LoginState.LoggedIn
+            }
+        }
+        onChatGpt(me) { it.copy(loadingModels = true) }
+        val models = catalog.codexModels()
+        onChatGpt(me) { it.copy(models = models, loadingModels = false) }
+    }
+
+    private suspend fun save(me: Job, telegram: Boolean, write: suspend () -> Result<Unit>) {
+        val failure = withContext(io) { write() }.exceptionOrNull()
+        when {
+            failure != null -> settle(me, SetupStep.Error(failure.message ?: failure.javaClass.simpleName))
+            telegram && !withContext(io) { configured() } -> settle(me, SetupStep.Saved(TELEGRAM))
+            else -> {
+                settle(me, SetupStep.Testing)
+                runTest(me)
+            }
+        }
+    }
+
+    private suspend fun runTest(me: Job) {
+        val reason = restart.restart()
+        if (reason != null) return settle(me, SetupStep.Error("the gateway did not start: $reason"))
+        settle(me, SetupStep.Done(withContext(io) { request.send() }))
+    }
+
+    private fun onChatGpt(me: Job, change: (SetupStep.ChatGpt) -> SetupStep.ChatGpt) {
+        synchronized(lock) {
+            val current = mutableStep.value
+            if (job === me && current is SetupStep.ChatGpt) mutableStep.value = change(current)
+        }
+    }
+
+    private fun settle(me: Job, next: SetupStep) {
+        synchronized(lock) {
+            if (job === me) mutableStep.value = next
+        }
+    }
+
+    private val SetupStep.busy get() = this == SetupStep.Saving || this == SetupStep.Testing
+
+    private companion object {
+        const val CODEX = "openai-codex"
+        const val TELEGRAM = "Telegram"
+        const val NO_PROVIDER = "choose a provider and save it first"
+    }
+}
