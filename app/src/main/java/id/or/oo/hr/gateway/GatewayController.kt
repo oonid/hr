@@ -77,6 +77,7 @@ class GatewayController(
         val factory = try {
             io {
                 profile.ensureProfile()
+                profile.writeProfileEnv(emptyMap())
                 launch.prepare()
             }
         } catch (e: CancellationException) {
