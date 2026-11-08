@@ -58,6 +58,10 @@ fun HomeScreen(app: HrApp, actions: HrActions, modifier: Modifier, open: (Screen
         if (installed != null) {
             GatewayCard(state, now, canStart, onStart = actions.startGateway, onStop = { app.gateway.stop() })
         }
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Button(onClick = actions.openTerminal, enabled = installed != null && canStart) { Text("Terminal") }
+            OutlinedButton(onClick = { open(Screen.Settings) }) { Text("Settings") }
+        }
         SessionBanners(app)
         if (recent.isNotEmpty()) {
             Card(modifier = Modifier.fillMaxWidth()) {
@@ -67,10 +71,6 @@ fun HomeScreen(app: HrApp, actions: HrActions, modifier: Modifier, open: (Screen
                     TextButton(onClick = { open(Screen.Logs) }) { Text("Full log") }
                 }
             }
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Button(onClick = actions.openTerminal, enabled = installed != null && canStart) { Text("Terminal") }
-            OutlinedButton(onClick = { open(Screen.Settings) }) { Text("Settings") }
         }
     }
 }
