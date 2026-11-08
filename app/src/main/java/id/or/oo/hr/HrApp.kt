@@ -71,7 +71,7 @@ class HrApp : Application(), ProotHost, SessionHost {
 
     override fun openAppIntent(): Intent = Intent(this, MainActivity::class.java)
 
-    val gatewayLog: LogBuffer by lazy { LogBuffer(secrets = { listOf(profiles.apiServerKey()) }) }
+    val gatewayLog: LogBuffer by lazy { LogBuffer(secrets = { profiles.secrets() }) }
 
     val images: ImageStore by lazy {
         ImageStore(

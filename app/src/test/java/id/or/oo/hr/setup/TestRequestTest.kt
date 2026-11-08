@@ -1,0 +1,176 @@
+package id.or.oo.hr.setup
+
+import id.or.oo.hr.HrFiles
+import id.or.oo.hr.TestHttpServer
+import id.or.oo.hr.TestHttpServer.Companion.response
+import id.or.oo.hr.image.HttpResponse
+import id.or.oo.hr.image.UrlHttp
+import id.or.oo.hr.profile.ProfileStore
+import id.or.oo.pr.session.Bind
+import kotlinx.coroutines.runBlocking
+import org.json.JSONObject
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Rule
+import org.junit.Test
+import org.junit.rules.TemporaryFolder
+import java.io.File
+import java.io.IOException
+import java.net.ServerSocket
+
+class TestRequestTest {
+
+    @get:Rule
+    val tmp = TemporaryFolder()
+
+    private var reply = response(200, """{"choices": [{"message": {"role": "assistant", "content": " ok\n"}}]}""")
+    private val server = TestHttpServer { _, _ -> reply }
+    private val url get() = "http://127.0.0.1:${server.port}/p/android/v1/chat/completions"
+    private val files by lazy { HrFiles(tmp.root) }
+    private val store by lazy { ProfileStore(files).also { it.ensureProfile() } }
+    private val settings by lazy {
+        ProfileSettings(HermesCommand({ _, _ -> 0 }, Bind("/host/profile", "/root/.hermes/profiles/android")), store)
+    }
+    private val env get() = File(files.profileDir, ".env")
+
+    @After
+    fun tearDown() {
+        server.close()
+    }
+
+    @Test
+    fun anOkAnswerIsAnswered() {
+        assertEquals(TestResult.Answered("ok"), TestRequest(UrlHttp(), { "k" }, url).send())
+    }
+
+    @Test
+    fun theKeyIsSentAsBearerWithTheExactBody() {
+        TestRequest(UrlHttp(), { "k" }, url).send()
+
+        assertEquals("Bearer k", server.seenHeaders.single()["authorization"])
+        assertEquals(listOf("POST"), server.methods)
+        assertEquals(listOf("/p/android/v1/chat/completions"), server.requests)
+        val body = JSONObject(server.bodies.single())
+        assertEquals(setOf("model", "messages"), body.keys().asSequence().toSet())
+        assertEquals("hermes-agent", body.getString("model"))
+        val message = body.getJSONArray("messages").getJSONObject(0)
+        assertEquals(1, body.getJSONArray("messages").length())
+        assertEquals("user", message.getString("role"))
+        assertEquals("Reply with exactly one word: ok", message.getString("content"))
+    }
+
+    @Test
+    fun a401IsRejected() {
+        reply = response(401, "x".repeat(600))
+
+        val result = TestRequest(UrlHttp(), { "k" }, url).send()
+
+        assertEquals(TestResult.Rejected(401, "x".repeat(500)), result)
+    }
+
+    @Test
+    fun a500IsRejected() {
+        reply = response(500, "boom")
+
+        assertEquals(TestResult.Rejected(500, "boom"), TestRequest(UrlHttp(), { "k" }, url).send())
+    }
+
+    @Test
+    fun noServerIsNoGateway() {
+        val port = ServerSocket(0).use { it.localPort }
+
+        val result = TestRequest(UrlHttp(), { "k" }, "http://127.0.0.1:$port/x").send()
+
+        assertEquals(TestResult.NoGateway, result)
+    }
+
+    @Test
+    fun aTimeoutIsFailed() {
+        val http = object : id.or.oo.hr.image.Http {
+            override fun get(url: String, headers: Map<String, String>) = error("unused")
+            override fun post(url: String, headers: Map<String, String>, body: String): HttpResponse =
+                throw IOException("Read timed out")
+        }
+
+        assertEquals(TestResult.Failed("Read timed out"), TestRequest(http, { "k" }, url).send())
+    }
+
+    @Test
+    fun anIoErrorWithoutAMessageIsNamedByItsClass() {
+        val http = object : id.or.oo.hr.image.Http {
+            override fun get(url: String, headers: Map<String, String>) = error("unused")
+            override fun post(url: String, headers: Map<String, String>, body: String): HttpResponse =
+                throw IOException()
+        }
+
+        assertEquals(TestResult.Failed("IOException"), TestRequest(http, { "k" }, url).send())
+    }
+
+    @Test
+    fun anUnreadableAnswerIsFailed() {
+        val unreadable = listOf("not json", "{}", """{"choices": []}""", """{"choices": [{"message": {}}]}""")
+        for (body in unreadable) {
+            reply = response(200, body)
+
+            assertEquals(
+                body,
+                TestResult.Failed("the gateway answered something hr cannot read"),
+                TestRequest(UrlHttp(), { "k" }, url).send(),
+            )
+        }
+    }
+
+    @Test
+    fun theKeyNeverAppearsInAResult() {
+        reply = response(401, "denied")
+
+        val result = TestRequest(UrlHttp(), { "secret-key" }, url).send()
+
+        assertFalse(result.toString().contains("secret-key"))
+    }
+
+    @Test
+    fun telegramUsersMustBeDigits() = runBlocking {
+        for (bad in listOf("alice", "1,,2", "1,x", ",1", "1,")) {
+            val result = settings.useTelegram("123:abc", bad)
+
+            assertTrue(bad, result.isFailure)
+        }
+        assertFalse(env.exists())
+    }
+
+    @Test
+    fun telegramWritesTheTokenAndUsers() = runBlocking {
+        val result = settings.useTelegram(" 123:abc ", "1, 22 ,333")
+
+        assertTrue(result.isSuccess)
+        val lines = env.readText().lines()
+        assertTrue(lines.contains("TELEGRAM_BOT_TOKEN=123:abc"))
+        assertTrue(lines.contains("TELEGRAM_ALLOWED_USERS=1,22,333"))
+    }
+
+    @Test
+    fun telegramWithoutUsersKeepsTheExistingList() = runBlocking {
+        store.writeProfileEnv(mapOf("TELEGRAM_ALLOWED_USERS" to "7,8"))
+
+        val result = settings.useTelegram("123:abc", "  ")
+
+        assertTrue(result.isSuccess)
+        val lines = env.readText().lines()
+        assertTrue(lines.contains("TELEGRAM_BOT_TOKEN=123:abc"))
+        assertTrue(lines.contains("TELEGRAM_ALLOWED_USERS=7,8"))
+    }
+
+    @Test
+    fun aBadTokenWritesNothing() = runBlocking {
+        for (bad in listOf("", "  ", "a b", "a=b", "a\"b", "a\\b", "a\nb")) {
+            val result = settings.useTelegram(bad, "1")
+
+            assertTrue(result.isFailure)
+            assertFalse(result.exceptionOrNull()!!.message!!.contains("a=b"))
+        }
+        assertFalse(env.exists())
+    }
+}

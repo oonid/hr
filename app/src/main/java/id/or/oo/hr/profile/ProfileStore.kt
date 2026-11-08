@@ -11,6 +11,8 @@ class ProfileStore(private val files: HrFiles, private val random: SecureRandom 
 
     private val lock = Any()
     private var key: String? = null
+    private var envStamp: Pair<Long, Long>? = null
+    private var envSecrets: List<String> = emptyList()
 
     fun ensureProfile(): File {
         val dir = files.profileDir
@@ -22,6 +24,16 @@ class ProfileStore(private val files: HrFiles, private val random: SecureRandom 
 
     fun apiServerKey(): String = synchronized(lock) {
         key ?: (readKey() ?: newKey()).also { key = it }
+    }
+
+    fun secrets(): List<String> = synchronized(lock) {
+        val env = File(files.profileDir, ".env")
+        val stamp = if (env.isFile) env.lastModified() to env.length() else null
+        if (stamp != envStamp || stamp == null) {
+            envStamp = stamp
+            envSecrets = if (stamp == null) emptyList() else secretValues(env.readText())
+        }
+        listOf(apiServerKey()) + envSecrets
     }
 
     fun writeRootEnv(rootfs: File) {
@@ -56,6 +68,14 @@ class ProfileStore(private val files: HrFiles, private val random: SecureRandom 
         writePrivate(files.keyFile, generated)
         return generated
     }
+
+    private fun secretValues(text: String): List<String> =
+        text.replace("\r", "").split('\n').mapNotNull { line ->
+            val assignment = line.trim().removePrefix("export ").trimStart()
+            val name = assignment.substringBefore('=').trim()
+            val value = assignment.substringAfter('=', "").trim().trim('"', '\'')
+            value.takeIf { it.isNotEmpty() && (name.endsWith("_KEY") || name.endsWith("_TOKEN")) }
+        }
 
     private companion object {
         val KEY_FORMAT = Regex("[0-9a-f]{64}")
