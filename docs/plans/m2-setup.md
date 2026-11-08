@@ -62,12 +62,16 @@ Measured in hr's container with image `v0.23.0-pab570a0b-gateway` (Hermes 0.23.0
 | Form entry | `model.provider` | Key variable in the profile `.env` | Other settings |
 |---|---|---|---|
 | OpenRouter | `openrouter` | `OPENROUTER_API_KEY` | – |
-| OpenAI | to pin | `OPENAI_API_KEY` | – |
-| Anthropic | to pin | `ANTHROPIC_API_KEY` | – |
-| Nous | to pin | `NOUS_API_KEY` | – |
-| OpenAI-compatible | `custom` | to pin | `model.base_url` |
+| OpenAI | `openai-api` | `OPENAI_API_KEY` | – |
+| Anthropic | `anthropic` | `ANTHROPIC_API_KEY` | – |
+| OpenAI-compatible | `custom` | `HERMES_CUSTOM_API_KEY` | `model.base_url`, and `model.api_key` set to the literal `${HERMES_CUSTOM_API_KEY}` |
 
-- [ ] **Step 1: List the provider definitions with Hermes's own Python**
+Pinned on the phone (2026-11-08) with Hermes's `get_provider`, `PROVIDER_REGISTRY` and `custom_endpoint_key_env("")`:
+
+- `nous` has auth type `oauth_device_code` and no key variable; `NOUS_API_KEY` is read only for the model catalogue. Nous therefore leaves the API-key form: the Advanced section points to `hermes auth add nous` in the terminal.
+- A custom endpoint has no key variable of its own. `hermes setup` writes the key to `.env` and puts `${<VAR>}` in `model.api_key`, which Hermes expands when it reads the config; `HERMES_CUSTOM_API_KEY` is Hermes's own name for an endpoint without an identity.
+
+- [x] **Step 1: List the provider definitions with Hermes's own Python**
 
 In hr's terminal on the phone (image installed, gateway stopped), write the probe to a file and run it:
 
@@ -79,11 +83,11 @@ grep -rhoE '"(anthropic|nous|openai|openai-api)"[^\n]{0,120}' /root/.hermes/herm
 
 Expected: `/root/providers.txt` names an id for each row "to pin" above, with its `api_key_env_vars`.
 
-- [ ] **Step 2: Check each id against Hermes**
+- [x] **Step 2: Check each id against Hermes**
 
 For each pinned id: `hermes config set model.provider <id> && hermes config check`. Expected: no "unknown provider". Restore `hermes config set model.provider openai-codex` afterwards, then `rm /root/providers.txt`.
 
-- [ ] **Step 3: Record the table** in this plan (replace each "to pin") and in the pull request. No commit of its own: it goes with Task 5.
+- [x] **Step 3: Record the table** in this plan (replace each "to pin") and in the pull request.
 
 ---
 
@@ -128,7 +132,7 @@ For each pinned id: `hermes config set model.provider <id> && hermes config chec
 - Test: `app/src/test/java/id/or/oo/hr/setup/CodexLoginTest.kt`
 
 **Interfaces:**
-- Consumes: `HermesCommand` (Task 2); a `TaskHolder` (`fun begin(label: String): AutoCloseable`), which `HrApp` backs with `sessions.beginTask(label) {}` / `endTask`.
+- Consumes: `HermesCommand` (Task 2); a `TaskHolder` (`fun begin(label: String, onCancel: () -> Unit): AutoCloseable`), which `HrApp` backs with `sessions.beginTask(label, onCancel)` / `endTask`. `CodexLogin` passes its own `cancel` as `onCancel`, so the notification's Cancel stops the login.
 - Produces:
   - `sealed interface LoginState { Idle; Starting; Waiting(val url: String, val code: String); LoggedIn; Cancelled; Failed(val reason: String) }`
   - `class CodexLogin(command: HermesCommand, tasks: TaskHolder, scope: CoroutineScope)` with `val state: StateFlow<LoginState>`, `fun start()`, `fun cancel()`, `suspend fun check(): Boolean` (runs `hermes auth status openai-codex`, true when a line equals `openai-codex: logged in`).
@@ -188,9 +192,9 @@ For each pinned id: `hermes config set model.provider <id> && hermes config chec
 
 **Interfaces:**
 - Consumes: Task 1's table, `ProfileSettings`, `ProfileStore.writeProfileEnv`.
-- Produces: `enum class ApiProvider(val label: String, val id: String, val keyVariable: String, val needsBaseUrl: Boolean)` with entries `OpenRouter`, `OpenAI`, `Anthropic`, `Nous`, `Compatible` (values from Task 1); `suspend fun ProfileSettings.useApiKey(provider: ApiProvider, key: String, model: String, baseUrl: String?): Result<Unit>` that writes `provider.keyVariable=key` with `writeProfileEnv` (never a command) and then `useModel(provider.id, model, baseUrl)`.
+- Produces: `enum class ApiProvider(val label: String, val id: String, val keyVariable: String, val needsBaseUrl: Boolean)` with entries `OpenRouter`, `OpenAI`, `Anthropic`, `Compatible` (values from Task 1; no Nous entry); `suspend fun ProfileSettings.useApiKey(provider: ApiProvider, key: String, model: String, baseUrl: String?): Result<Unit>` that writes `provider.keyVariable=key` with `writeProfileEnv` (never a command) and then `useModel(provider.id, model, baseUrl)`. For `Compatible`, `useModel` also runs `hermes config set model.api_key '${HERMES_CUSTOM_API_KEY}'`: a fixed literal in single quotes, never user text, so it is exempt from the value check.
 
-- [ ] **Step 1: Write the failing tests**: `theKeyGoesOnlyToTheEnvFile` (the fake `HermesCommand` never sees the key text); `compatibleNeedsABaseUrl` (`Result.failure` without one); `aBlankKeyIsRefused`; one test per entry asserting its `id` and `keyVariable` from Task 1.
+- [ ] **Step 1: Write the failing tests**: `theKeyGoesOnlyToTheEnvFile` (the fake `HermesCommand` never sees the key text); `compatibleNeedsABaseUrl` (`Result.failure` without one); `compatibleReferencesItsKeyFromTheConfig` (the script contains `hermes config set model.api_key '${HERMES_CUSTOM_API_KEY}'` and `model.base_url <url>`); `aBlankKeyIsRefused`; one test per entry asserting its `id` and `keyVariable` from Task 1.
 - [ ] **Step 2: Run.** Expected: FAIL.
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run.** Expected: PASS.
@@ -229,14 +233,15 @@ For each pinned id: `hermes config set model.provider <id> && hermes config chec
 - Test: `app/src/test/java/id/or/oo/hr/setup/SetupControllerTest.kt`
 
 **Interfaces:**
-- Consumes: `CodexLogin`, `ModelCatalog`, `ProfileSettings`, `ApiProvider`, `TestRequest`, a `GatewayRestart` (`suspend fun restart(): Boolean`, true when *Running* afterwards).
+- Consumes: `CodexLogin`, `ModelCatalog`, `ProfileSettings`, `ApiProvider`, `TestRequest`, a `GatewayRestart` (`suspend fun restart(): String?`: null when the gateway is *Running* afterwards, otherwise the reason, such as `GatewayState.Failed.reason`, which is `PORT_IN_USE` when a stray gateway holds the port).
+- Produces also: `class ControllerRestart(state: StateFlow<GatewayState>, stop: () -> Boolean, start: () -> Boolean, stopMs: Long = 65_000, startMs: Long = 120_000) : GatewayRestart`, in `id.or.oo.hr.setup`, with its own tests (`restartsAndWaitsForRunning`, `aFailedStartGivesItsReason`, `aStartThatNeverRunsTimesOut`). Task 8 wires it in `HrApp` with `gateway.state`, `gateway::stop`, `gateway::start`.
 - Produces: `class SetupController(…)` with `val step: StateFlow<SetupStep>` (`Choose`, `ChatGpt(login: LoginState, models: List<String>?)`, `Saving`, `Testing`, `Done(result: TestResult)`, `Error(reason: String)`), `fun chooseChatGpt()`, `fun chooseApiKey(provider, key, model, baseUrl)`, `fun saveCodexModel(model: String)`, `fun test()`.
 
 `saveCodexModel` and `chooseApiKey` save, then `test()` restarts the gateway (Hermes reads the profile at start) and sends the request.
 
-- [ ] **Step 1: Write the failing tests** with fakes: `loggingInThenSavingTestsThroughTheGateway` (order: login → `codexModels` → `useModel("openai-codex", m)` → `restart` → `send`); `modelsUnavailableStillAllowsATypedModel` (Review Focus 3); `aRestartThatFailsIsAnErrorNamingTheGateway`; `testWithoutAnyProviderIsAnError`.
+- [ ] **Step 1: Write the failing tests** with fakes: `loggingInThenSavingTestsThroughTheGateway` (order: login → `codexModels` → `useModel("openai-codex", m)` → `restart` → `send`); `modelsUnavailableStillAllowsATypedModel` (Review Focus 3); `aRestartThatFailsIsAnErrorWithTheGatewaysReason` (restart returns `PORT_IN_USE` → `Error` whose reason contains it, Review Focus 4); `testWithoutAnyProviderIsAnError`; and the three `ControllerRestart` tests.
 - [ ] **Step 2: Run.** Expected: FAIL.
-- [ ] **Step 3: Implement.** `HrApp` backs `GatewayRestart` with `gateway.stop()`, waiting for `Stopped`, then `gateway.start()`, waiting for `Running` (65 s and 120 s bounds).
+- [ ] **Step 3: Implement.** `ControllerRestart` calls `stop()`, waits up to `stopMs` for a state that is not active, calls `start()`, then waits up to `startMs` for `Running` (null) or a settled non-running state (its reason: `Failed.reason`, or a text naming `StoppedUnexpectedly`'s exit code), or the bound (a timeout text).
 - [ ] **Step 4: Run.** Expected: PASS; `SetupController.kt` ≥ 80%.
 - [ ] **Step 5: Commit** `feat: the setup flow from provider to test request`.
 
@@ -254,7 +259,7 @@ The screen, top to bottom:
 - **API key:** a provider dropdown (`ApiProvider.label`), a password field for the key (never shown back; the field is empty after Save), Model, and Base URL when `needsBaseUrl`; Save.
 - **Telegram (optional):** bot token (password field) and allowed user ids; Save.
 - **Test:** the button, then the answer text, or the reason.
-- **Advanced:** "Open the terminal and run `hermes setup` for other providers and platforms. Commands such as `hermes chat` start a gateway of their own; while it runs, hr cannot start its gateway. Use Test here instead." and a Terminal button.
+- **Advanced:** "Open the terminal and run `hermes setup` for other providers and platforms, or `hermes auth add nous` to sign in to Nous Portal. Commands such as `hermes chat` start a gateway of their own; while it runs, hr cannot start its gateway. Use Test here instead." and a Terminal button.
 
 - [ ] **Step 1: Build** `./gradlew :app:assembleDebug :app:testDebugUnitTest`. Expected: BUILD SUCCESSFUL, all tests pass.
 - [ ] **Step 2: Commit** `feat: the Setup screen`.
