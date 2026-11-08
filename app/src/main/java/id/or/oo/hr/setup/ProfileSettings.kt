@@ -3,7 +3,7 @@ package id.or.oo.hr.setup
 import id.or.oo.hr.profile.ProfileStore
 import kotlinx.coroutines.CancellationException
 
-private val SAFE_VALUE = Regex("^[A-Za-z0-9._:/@+-]+$")
+private val SAFE_VALUE = Regex("^[A-Za-z0-9._:/@+][A-Za-z0-9._:/@+-]*$")
 
 class ProfileSettings(private val command: HermesCommand, private val profiles: ProfileStore) {
 
