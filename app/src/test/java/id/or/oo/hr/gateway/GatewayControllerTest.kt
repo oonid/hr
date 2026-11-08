@@ -125,6 +125,20 @@ class GatewayControllerTest {
     }
 
     @Test
+    fun startWritesTheApiKeyIntoTheProfileEnvAndKeepsOtherLines() {
+        profile.ensureProfile()
+        val env = java.io.File(files.profileDir, ".env")
+        env.writeText("FOO=bar\n")
+
+        controller.start()
+        eventually { prepared.get() == 1 }
+
+        val lines = env.readText().lines()
+        assertTrue(lines.contains("FOO=bar"))
+        assertTrue(lines.contains("API_SERVER_KEY=${profile.apiServerKey()}"))
+    }
+
+    @Test
     fun theGatewaysOutputReachesTheLogAfterAStartMark() {
         controller.start()
         eventually { ptys.size == 1 }
