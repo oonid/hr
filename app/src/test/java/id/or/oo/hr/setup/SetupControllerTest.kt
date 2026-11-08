@@ -37,7 +37,9 @@ class SetupControllerTest {
 
     private var loggedIn = false
     private var checkFailure: Exception? = null
-    private val loginExit = CompletableDeferred<Int>()
+    private var loginExit = CompletableDeferred<Int>()
+    private var checkGate: CompletableDeferred<Unit>? = null
+    private val checkCancelled = CompletableDeferred<Unit>()
     private val loginCancelled = CompletableDeferred<Unit>()
     private var models: String? = "MODELS [\"gpt-6.1-sol\", \"gpt-5.6-luna\"]"
     private val modelsGate = CompletableDeferred<Unit>()
@@ -52,6 +54,12 @@ class SetupControllerTest {
                 "hermes auth status openai-codex" -> {
                     calls += "check"
                     checkFailure?.let { throw it }
+                    try {
+                        checkGate?.await()
+                    } catch (e: CancellationException) {
+                        checkCancelled.complete(Unit)
+                        throw e
+                    }
                     if (loggedIn) onLine("openai-codex: logged in")
                     0
                 }
@@ -339,5 +347,49 @@ class SetupControllerTest {
         controller.test()
 
         assertEquals(SetupStep.Error("IllegalStateException"), await { it is SetupStep.Error })
+    }
+
+    private fun checks() = calls.count { it == "check" }
+
+    @Test
+    fun theFirstStepIsStartingEvenAfterAnEarlierLogin() {
+        val starting = SetupStep.ChatGpt(LoginState.Starting, null, false)
+        modelsGate.complete(Unit)
+        loginExit.complete(1)
+        controller.chooseChatGpt()
+        await { it is SetupStep.ChatGpt && it.login is LoginState.Failed }
+        controller.back()
+
+        val failedGate = CompletableDeferred<Unit>().also { checkGate = it }
+        controller.chooseChatGpt()
+        waitFor { checks() == 2 }
+        assertTrue(login.state.value is LoginState.Failed)
+        assertEquals(starting, controller.step.value)
+
+        loginExit = CompletableDeferred(0)
+        failedGate.complete(Unit)
+        await { it is SetupStep.ChatGpt && it.models != null }
+        controller.back()
+
+        checkGate = CompletableDeferred()
+        controller.chooseChatGpt()
+        waitFor { checks() == 3 }
+        assertEquals(LoginState.LoggedIn, login.state.value)
+        assertEquals(starting, controller.step.value)
+    }
+
+    @Test
+    fun cancelDuringTheCheckStartsNoLogin() {
+        checkGate = CompletableDeferred()
+        controller.chooseChatGpt()
+        waitFor { "check" in calls }
+
+        controller.cancelLogin()
+
+        assertEquals(SetupStep.ChatGpt(LoginState.Cancelled, null, false), controller.step.value)
+        runBlocking { withTimeout(5_000) { checkCancelled.await() } }
+        assertFalse("login" in calls)
+        assertEquals(LoginState.Idle, login.state.value)
+        assertEquals(SetupStep.ChatGpt(LoginState.Cancelled, null, false), controller.step.value)
     }
 }
