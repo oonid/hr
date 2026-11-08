@@ -39,8 +39,15 @@ class ProfileSettings(private val command: HermesCommand, internal val profiles:
         }
     }
 
-    internal fun checkValues(provider: String, model: String, baseUrl: String?): Throwable? =
-        listOfNotNull("provider" to provider, "default" to model, baseUrl?.let { "base_url" to it })
-            .firstOrNull { (_, value) -> !SAFE_VALUE.matches(value) }
-            ?.let { (key, _) -> IllegalArgumentException("the model $key has characters that are not allowed") }
+    internal fun checkValues(provider: String, model: String, baseUrl: String?): Throwable? {
+        val values = listOfNotNull("provider" to provider, "default" to model, baseUrl?.let { "base_url" to it })
+        values.firstOrNull { (_, value) -> value.isBlank() }
+            ?.let { (key, _) -> return IllegalArgumentException("the model $key is empty") }
+        values.firstOrNull { (_, value) -> !SAFE_VALUE.matches(value) }
+            ?.let { (key, _) -> return IllegalArgumentException("the model $key has characters that are not allowed") }
+        if (baseUrl != null && baseUrl.substringAfter("://").substringBefore('/').contains('@')) {
+            return IllegalArgumentException("the base URL must not contain a user name or password")
+        }
+        return null
+    }
 }

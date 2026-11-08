@@ -52,6 +52,31 @@ class ProfileSettingsTest {
     }
 
     @Test
+    fun aBlankModelIsEmptyNotDisallowed() = runBlocking {
+        for (blank in listOf("", "  ")) {
+            val result = settings().useModel("openrouter", blank)
+
+            assertEquals("the model default is empty", result.exceptionOrNull()!!.message)
+        }
+        assertTrue(scripts.isEmpty())
+    }
+
+    @Test
+    fun aBaseUrlWithCredentialsIsRefused() = runBlocking {
+        for (url in listOf("https://user:secret@host/v1", "https://user@host/v1")) {
+            val result = settings().useModel("custom", "m", url)
+
+            assertEquals("the base URL must not contain a user name or password", result.exceptionOrNull()!!.message)
+        }
+        assertTrue(scripts.isEmpty())
+    }
+
+    @Test
+    fun aModelNameMayContainAnAt() = runBlocking {
+        assertTrue(settings().useModel("openrouter", "user@v1").isSuccess)
+    }
+
+    @Test
     fun aBaseUrlIsAppended() = runBlocking {
         val url = "https://api.example.com/v1"
         settings().useModel("custom", "m", url)
