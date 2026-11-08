@@ -4689,12 +4689,12 @@ adb logcat -c
 adb shell am start -n id.or.oo.hr/.MainActivity
 sleep 5
 adb logcat -d -s PR | grep -E 'Running bootstrap|Bootstrap complete|Bootstrap failed'
-adb shell run-as id.or.oo.hr ls -l files/usr/bin/pr-cli files/usr/bin/proot files/usr/bin/sh
+adb shell run-as id.or.oo.hr ls -l files/usr/bin/pr-cli files/usr/bin/proot
 adb shell run-as id.or.oo.hr ls -la files/hr
 adb logcat -d -b crash
 ```
 
-Expected: Home shows "Hermes is not installed…" and Install; `Running bootstrap...` and `Bootstrap complete (...ms)`, no `Bootstrap failed`; `pr-cli` and `proot` link to `lib*.so` in the app's native library directory, `sh -> busybox`; `files/hr` holds `profile/`; no crash output.
+Expected: Home shows "Hermes is not installed…" and Install; `Running bootstrap...` and `Bootstrap complete (...ms)`, no `Bootstrap failed`; `pr-cli` and `proot` link to `lib*.so` in the app's native library directory (pr ships no busybox since `b691445`, so there is no `sh` link); `files/hr` holds `profile/`; no crash output.
 
 - [ ] **Step 2: Install the image**
 
@@ -4871,8 +4871,10 @@ Expected: both sessions stop; Home shows *Stopped* (not "killed", not *Stopped u
 Tap Start, wait for *Running*, open Terminal and run:
 
 ```sh
-pkill -9 -f 'hermes gateway run'
+kill -9 "$(sed -n 's/.*"pid": \([0-9]*\).*/\1/p' /root/.hermes/gateway.pid)"
 ```
+
+(The gateway runs as `python3 -I -c '<launcher>' …`, so `pkill -f 'hermes gateway run'` matches nothing; its PID is in `gateway.pid`. The 137 below needs pr `9c06739` or later, whose proot reports a death by signal.)
 
 Press Back, choose Keep running.
 
