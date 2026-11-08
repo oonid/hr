@@ -158,4 +158,42 @@ class ProfileStoreTest {
         assertTrue(secrets.contains("second-longer"))
         assertFalse(secrets.contains("first"))
     }
+
+    private fun configWith(text: String): ProfileStore {
+        store.ensureProfile()
+        File(files.profileDir, "config.yaml").writeText(text)
+        return store
+    }
+
+    @Test
+    fun noConfigHasNoProvider() {
+        assertFalse(store.hasProvider())
+    }
+
+    @Test
+    fun aProviderUnderModelIsAProvider() {
+        assertTrue(configWith("model:\n  default: gpt-5.6-luna\n  provider: openai-codex\n").hasProvider())
+        assertTrue(configWith("agent:\n  x: 1\nmodel:   # main\n\n  provider: \"openrouter\"\n").hasProvider())
+        assertTrue(configWith("model:\n    provider: anthropic\nother: 1\n").hasProvider())
+    }
+
+    @Test
+    fun aProviderElsewhereOrEmptyIsNotAProvider() {
+        val configs = listOf(
+            "",
+            "provider: openrouter\n",
+            "auxiliary:\n  provider: openrouter\n",
+            "model:\n  provider:\n",
+            "model:\n  provider: ''\n",
+            "model:\n  provider: \"\"  # none\n",
+            "model:\n  fallback:\n    provider: openrouter\n",
+            "model:\n  default: m\nauxiliary:\n  provider: openrouter\n",
+            "# model:\n#   provider: openrouter\n",
+            "model: gpt\n",
+            "models:\n  provider: openrouter\n",
+        )
+        for (config in configs) {
+            assertFalse(config, configWith(config).hasProvider())
+        }
+    }
 }

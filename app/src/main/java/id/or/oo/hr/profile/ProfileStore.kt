@@ -52,6 +52,31 @@ class ProfileStore(private val files: HrFiles, private val random: SecureRandom 
         }
     }
 
+    fun hasProvider(): Boolean {
+        val config = File(files.profileDir, CONFIG)
+        if (!config.isFile) return false
+        var inModel = false
+        var childIndent = -1
+        for (raw in config.readLines()) {
+            val line = raw.substringBefore(" #").trimEnd()
+            if (line.isBlank() || line.trimStart().startsWith("#")) continue
+            val indent = line.length - line.trimStart().length
+            if (indent == 0) {
+                inModel = line == "model:"
+                childIndent = -1
+                continue
+            }
+            if (!inModel) continue
+            if (childIndent < 0) childIndent = indent
+            if (indent != childIndent) continue
+            val entry = line.trim()
+            if (!entry.startsWith("provider:")) continue
+            val value = entry.removePrefix("provider:").trim().removeSurrounding("\"").removeSurrounding("'")
+            if (value.isNotEmpty()) return true
+        }
+        return false
+    }
+
     private fun listenerSettings(): Map<String, String> = linkedMapOf(
         "API_SERVER_ENABLED" to "true",
         "API_SERVER_KEY" to apiServerKey(),
@@ -79,5 +104,6 @@ class ProfileStore(private val files: HrFiles, private val random: SecureRandom 
 
     private companion object {
         val KEY_FORMAT = Regex("[0-9a-f]{64}")
+        const val CONFIG = "config.yaml"
     }
 }
