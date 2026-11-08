@@ -28,7 +28,7 @@ import id.or.oo.hr.setup.ApiProvider
 import id.or.oo.hr.setup.SetupController
 
 @Composable
-fun ApiKeyForm(controller: SetupController) {
+fun ApiKeyForm(controller: SetupController, actions: HrActions) {
     var provider by rememberSaveable { mutableStateOf(ApiProvider.entries.first()) }
     var key by remember { mutableStateOf("") }
     var model by rememberSaveable { mutableStateOf("") }
@@ -41,25 +41,33 @@ fun ApiKeyForm(controller: SetupController) {
         FormField("API key", key, secret = true) { key = it }
         FormField("Model", model) { model = it }
         if (provider.needsBaseUrl) FormField("Base URL", baseUrl) { baseUrl = it }
-        Button(onClick = {
-            controller.chooseApiKey(provider, key, model.trim(), baseUrl.takeIf { provider.needsBaseUrl })
-            key = ""
-        }) { Text("Save") }
+        Button(
+            onClick = {
+                actions.askNotificationsOnce()
+                controller.chooseApiKey(provider, key, model.trim(), baseUrl.takeIf { provider.needsBaseUrl })
+                key = ""
+            },
+            enabled = key.isNotBlank() && model.isNotBlank() && (!provider.needsBaseUrl || baseUrl.isNotBlank()),
+        ) { Text("Save") }
     }
 }
 
 @Composable
-fun TelegramForm(controller: SetupController) {
+fun TelegramForm(controller: SetupController, actions: HrActions) {
     var token by remember { mutableStateOf("") }
     var users by rememberSaveable { mutableStateOf("") }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("Telegram (optional)", style = MaterialTheme.typography.titleSmall)
         FormField("Bot token", token, secret = true) { token = it }
         FormField("Allowed user ids", users) { users = it }
-        Button(onClick = {
-            controller.saveTelegram(token, users)
-            token = ""
-        }) { Text("Save") }
+        Button(
+            onClick = {
+                actions.askNotificationsOnce()
+                controller.saveTelegram(token, users)
+                token = ""
+            },
+            enabled = token.isNotBlank(),
+        ) { Text("Save") }
     }
 }
 
