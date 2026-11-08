@@ -151,8 +151,8 @@ class GatewayController(
         const val POLL_MS = 1_000L
         const val LAST_LINES = 20
         const val START_MARK = "Starting the gateway"
-        const val PORT_IN_USE = "something already answers on 127.0.0.1:8642, perhaps a gateway started " +
-            "in another app; hr does not start a second one"
+        const val PORT_IN_USE = "something already answers on 127.0.0.1:8642: a gateway started in another app, " +
+            "or from hr's terminal (hermes chat starts one); hr does not start a second one"
         const val CANNOT_STOP = "couldn't stop the gateway; it did not exit in time"
     }
 }

@@ -12,6 +12,9 @@ class TestHttpServer(private val respond: (path: String, headers: Map<String, St
     private val socket = ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"))
     val port: Int get() = socket.localPort
     val requests = CopyOnWriteArrayList<String>()
+    val methods = CopyOnWriteArrayList<String>()
+    val bodies = CopyOnWriteArrayList<String>()
+    val seenHeaders = CopyOnWriteArrayList<Map<String, String>>()
 
     init {
         thread(isDaemon = true, name = "test-http") {
@@ -31,7 +34,13 @@ class TestHttpServer(private val respond: (path: String, headers: Map<String, St
         val requestLine = reader.readLine() ?: return
         val headers = generateSequence { reader.readLine()?.takeIf { it.isNotEmpty() } }
             .associate { it.substringBefore(':').lowercase() to it.substringAfter(':').trim() }
-        val path = requestLine.split(' ')[1]
+        val parts = requestLine.split(' ')
+        val path = parts[1]
+        val length = headers["content-length"]?.toIntOrNull() ?: 0
+        val body = CharArray(length).also { reader.read(it, 0, length) }.concatToString()
+        methods += parts[0]
+        bodies += body
+        seenHeaders += headers
         requests += path
         client.getOutputStream().apply {
             write(respond(path, headers).toByteArray())

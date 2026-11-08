@@ -14,7 +14,7 @@ enum class ApiProvider(
     Compatible("OpenAI-compatible", "custom", "HERMES_CUSTOM_API_KEY", true),
 }
 
-private fun String.corruptsAnEnvLine() =
+internal fun String.corruptsAnEnvLine() =
     any { it.isWhitespace() || it.isISOControl() || it == '=' || it == '"' || it == '\'' || it == '\\' }
 
 suspend fun ProfileSettings.useApiKey(

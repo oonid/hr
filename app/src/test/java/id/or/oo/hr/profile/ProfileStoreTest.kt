@@ -3,6 +3,7 @@ package id.or.oo.hr.profile
 import id.or.oo.hr.HrFiles
 import id.or.oo.pr.session.Bind
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -124,5 +125,37 @@ class ProfileStoreTest {
         assertTrue(lines.contains("API_SERVER_KEY=${store.apiServerKey()}"))
         assertTrue(Regex("[0-9a-f]{64}").matches(store.apiServerKey()))
         assertEquals("rw-------", permissions(env))
+    }
+
+    @Test
+    fun secretsIncludeTheApiKeyAndEveryKeyOrTokenValue() {
+        store.writeProfileEnv(
+            mapOf("TELEGRAM_BOT_TOKEN" to "123:abc", "OPENROUTER_API_KEY" to "sk-or", "FOO" to "bar", "EMPTY_KEY" to ""),
+        )
+
+        val secrets = store.secrets()
+
+        assertTrue(secrets.contains(store.apiServerKey()))
+        assertTrue(secrets.contains("123:abc"))
+        assertTrue(secrets.contains("sk-or"))
+        assertFalse(secrets.contains("bar"))
+        assertFalse(secrets.contains(""))
+    }
+
+    @Test
+    fun secretsWithoutAnEnvFileAreTheApiKey() {
+        assertEquals(listOf(store.apiServerKey()), store.secrets())
+    }
+
+    @Test
+    fun secretsPickUpARewriteOfTheEnvFile() {
+        store.writeProfileEnv(mapOf("TELEGRAM_BOT_TOKEN" to "first"))
+        assertTrue(store.secrets().contains("first"))
+
+        store.writeProfileEnv(mapOf("TELEGRAM_BOT_TOKEN" to "second-longer"))
+
+        val secrets = store.secrets()
+        assertTrue(secrets.contains("second-longer"))
+        assertFalse(secrets.contains("first"))
     }
 }
