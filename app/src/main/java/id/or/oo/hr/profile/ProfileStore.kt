@@ -31,6 +31,15 @@ class ProfileStore(private val files: HrFiles, private val random: SecureRandom 
         writePrivate(env, mergeEnv(existing, listenerSettings()))
     }
 
+    fun writeProfileEnv(values: Map<String, String>) {
+        val dir = ensureProfile()
+        synchronized(lock) {
+            val env = File(dir, ".env")
+            val existing = if (env.isFile) env.readText() else ""
+            writePrivate(env, mergeEnv(existing, values + ("API_SERVER_KEY" to apiServerKey())))
+        }
+    }
+
     private fun listenerSettings(): Map<String, String> = linkedMapOf(
         "API_SERVER_ENABLED" to "true",
         "API_SERVER_KEY" to apiServerKey(),
