@@ -7,10 +7,13 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 const val LOGIN_SCRIPT = "PYTHONUNBUFFERED=1 hermes auth add openai-codex --no-browser"
 private const val STATUS_SCRIPT = "hermes auth status openai-codex"
 private const val LOGGED_IN_LINE = "openai-codex: logged in"
+const val LIMIT_MS = 20 * 60_000L
+private const val EXPIRED = "the sign-in code expired; sign in again"
 private const val TASK_LABEL = "Signing in to ChatGPT…"
 
 private val CODE_LINE = Regex("^[A-Z0-9]{4}-[A-Z0-9]{4,6}$")
@@ -33,6 +36,7 @@ class CodexLogin(
     private val command: HermesCommand,
     private val tasks: TaskHolder,
     private val scope: CoroutineScope,
+    private val limitMs: Long = LIMIT_MS,
 ) {
     private val lock = Any()
     private var job: Job? = null
@@ -71,16 +75,19 @@ class CodexLogin(
         var code: String? = null
         var last: String? = null
         try {
-            val exit = command.run(LOGIN_SCRIPT) { raw ->
-                val line = raw.trim()
-                if (line.isEmpty()) return@run
-                last = line
-                if (url == null && URL_LINE.matches(line)) url = line
-                else if (code == null && CODE_LINE.matches(line)) code = line
-                val u = url
-                val c = code
-                if (u != null && c != null) settle(me, LoginState.Waiting(u, c))
+            val exit = withTimeoutOrNull(limitMs) {
+                command.run(LOGIN_SCRIPT) { raw ->
+                    val line = raw.trim()
+                    if (line.isEmpty()) return@run
+                    last = line
+                    if (url == null && URL_LINE.matches(line)) url = line
+                    else if (code == null && CODE_LINE.matches(line)) code = line
+                    val u = url
+                    val c = code
+                    if (u != null && c != null) settle(me, LoginState.Waiting(u, c))
+                }
             }
+            if (exit == null) return settle(me, LoginState.Failed(EXPIRED))
             settle(
                 me,
                 if (exit == 0) LoginState.LoggedIn
