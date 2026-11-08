@@ -13,7 +13,12 @@ sealed interface TestResult {
     data class Failed(val reason: String) : TestResult
 }
 
-class TestRequest(private val http: Http, private val key: () -> String, private val url: String = URL) {
+class TestRequest(
+    private val http: Http,
+    private val key: () -> String,
+    private val url: String = URL,
+    private val secrets: () -> List<String> = { listOf(key()) },
+) {
 
     fun send(): TestResult {
         val body = JSONObject()
@@ -30,14 +35,17 @@ class TestRequest(private val http: Http, private val key: () -> String, private
         } catch (e: IOException) {
             return TestResult.Failed(e.message ?: e.javaClass.simpleName)
         }
-        if (response.code >= 400) return TestResult.Rejected(response.code, response.body.take(BODY_LIMIT))
+        if (response.code >= 400) return TestResult.Rejected(response.code, redact(response.body).take(BODY_LIMIT))
         val text = answer(response.body)
             ?: return TestResult.Failed("the gateway answered something hr cannot read")
         return TestResult.Answered(text.trim())
     }
 
+    private fun redact(body: String): String =
+        secrets().filter { it.isNotBlank() }.fold(body) { text, secret -> text.replace(secret, "[redacted]") }
+
     private fun answer(body: String): String? = try {
-        JSONObject(body).getJSONArray("choices").getJSONObject(0).getJSONObject("message").getString("content")
+        JSONObject(body).getJSONArray("choices").getJSONObject(0).getJSONObject("message").opt("content") as? String
     } catch (e: org.json.JSONException) {
         null
     }
