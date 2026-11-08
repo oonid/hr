@@ -71,6 +71,15 @@ class TestRequestTest {
     }
 
     @Test
+    fun everySecretInARejectedBodyIsRedacted() {
+        reply = response(401, "invalid api key: sk-one and tok-two, sk-one again")
+
+        val result = TestRequest(UrlHttp(), { "sk-one" }, url, { listOf("sk-one", "", "tok-two") }).send()
+
+        assertEquals(TestResult.Rejected(401, "invalid api key: [redacted] and [redacted], [redacted] again"), result)
+    }
+
+    @Test
     fun a500IsRejected() {
         reply = response(500, "boom")
 
@@ -110,7 +119,10 @@ class TestRequestTest {
 
     @Test
     fun anUnreadableAnswerIsFailed() {
-        val unreadable = listOf("not json", "{}", """{"choices": []}""", """{"choices": [{"message": {}}]}""")
+        val unreadable = listOf("not json", "{}", """{"choices": []}""", """{"choices": [{"message": {}}]}""",
+            """{"choices": [{"message": {"content": null}}]}""",
+            """{"choices": [{"message": {"content": 5}}]}""",
+        )
         for (body in unreadable) {
             reply = response(200, body)
 

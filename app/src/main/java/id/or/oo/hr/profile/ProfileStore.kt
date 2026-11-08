@@ -99,11 +99,12 @@ class ProfileStore(private val files: HrFiles, private val random: SecureRandom 
             val assignment = line.trim().removePrefix("export ").trimStart()
             val name = assignment.substringBefore('=').trim()
             val value = assignment.substringAfter('=', "").trim().trim('"', '\'')
-            value.takeIf { it.isNotEmpty() && (name.endsWith("_KEY") || name.endsWith("_TOKEN")) }
+            value.takeIf { it.isNotEmpty() && SECRET_SUFFIXES.any { name.endsWith(it) } }
         }
 
     private companion object {
         val KEY_FORMAT = Regex("[0-9a-f]{64}")
         const val CONFIG = "config.yaml"
+        val SECRET_SUFFIXES = listOf("_KEY", "_TOKEN", "_PASSWORD", "_SECRET")
     }
 }

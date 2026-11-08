@@ -130,7 +130,9 @@ class ProfileStoreTest {
     @Test
     fun secretsIncludeTheApiKeyAndEveryKeyOrTokenValue() {
         store.writeProfileEnv(
-            mapOf("TELEGRAM_BOT_TOKEN" to "123:abc", "OPENROUTER_API_KEY" to "sk-or", "FOO" to "bar", "EMPTY_KEY" to ""),
+            mapOf("TELEGRAM_BOT_TOKEN" to "123:abc", "OPENROUTER_API_KEY" to "sk-or", "FOO" to "bar", "EMPTY_KEY" to "",
+                "MATRIX_PASSWORD" to "pw-1", "SLACK_SIGNING_SECRET" to "sec-1",
+            ),
         )
 
         val secrets = store.secrets()
@@ -138,6 +140,8 @@ class ProfileStoreTest {
         assertTrue(secrets.contains(store.apiServerKey()))
         assertTrue(secrets.contains("123:abc"))
         assertTrue(secrets.contains("sk-or"))
+        assertTrue(secrets.contains("pw-1"))
+        assertTrue(secrets.contains("sec-1"))
         assertFalse(secrets.contains("bar"))
         assertFalse(secrets.contains(""))
     }

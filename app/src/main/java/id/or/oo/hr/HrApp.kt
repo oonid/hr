@@ -117,7 +117,7 @@ class HrApp : Application(), ProotHost, SessionHost {
             login,
             ModelCatalog(hermesCommand),
             ProfileSettings(hermesCommand, profiles),
-            TestRequest(UrlHttp(), profiles::apiServerKey),
+            TestRequest(UrlHttp(), profiles::apiServerKey, secrets = profiles::secrets),
             ControllerRestart(gateway.state, gateway::stop, gateway::start),
             profiles::hasProvider,
             gatewayScope,
