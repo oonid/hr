@@ -6,8 +6,9 @@ Guide for AI coding agents working on this project.
 
 **hr**: an Android app that runs the Hermes Agent gateway on a phone, in an Alpine container
 under PRoot, on the engine of oonid/pr.
-- Android package: `id.or.oo.hr`; minSdk 28, targetSdk 35, compileSdk 36, arm64-v8a only
-- Kotlin and Compose; JDK 17; AGP 8.7.3, Kotlin 2.1.0, Gradle 8.11.1
+- Android package: `id.or.oo.hr`; minSdk 28, targetSdk 35, compileSdk 37, arm64-v8a only
+- Kotlin and Compose; JDK 17; AGP 9.4.1 with its built-in Kotlin, Kotlin 2.4.21, Gradle 9.8.2,
+  Compose BOM 2026.09.00 (the versions pr's modules need)
 - pr's `:proot-engine`, `:termlib` and `:session-core` come from the `vendor/pr` submodule
 - Design: `docs/design/hr-app.md`; plans: `docs/plans/`
 
