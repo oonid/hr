@@ -50,7 +50,7 @@ fun SessionBanners(app: HrApp) {
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text("Keep CPU awake", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-                    Switch(checked = keepAwake, onCheckedChange = { app.sessions.setKeepCpuAwake(it) })
+                    Switch(checked = keepAwake, onCheckedChange = { app.keepAwake.set(it) })
                 }
             }
         }

@@ -94,10 +94,26 @@ class HrApp : Application(), ProotHost, SessionHost {
         )
     }
 
+    val keepAwake: KeepAwake by lazy {
+        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+        KeepAwake(
+            object : KeepAwake.Store {
+                override var remembered: Boolean
+                    get() = prefs.getBoolean(KEEP_AWAKE, false)
+                    set(value) = prefs.edit().putBoolean(KEEP_AWAKE, value).apply()
+            },
+            sessions.running,
+            sessions.keepCpuAwake,
+            sessions::setKeepCpuAwake,
+            gatewayScope,
+        )
+    }
+
     override fun onCreate() {
         super.onCreate()
         PrBootstrap(this, this, BOOTSTRAP_VERSION).run()
         profiles.ensureProfile()
+        keepAwake
     }
 
     private fun prepareGateway(): SessionManager.SessionFactory {
@@ -114,7 +130,9 @@ class HrApp : Application(), ProotHost, SessionHost {
         )
     }
 
-    private companion object {
-        const val BOOTSTRAP_VERSION = 1
+    companion object {
+        const val PREFS = "hr_prefs"
+        private const val BOOTSTRAP_VERSION = 1
+        private const val KEEP_AWAKE = "keep_cpu_awake"
     }
 }
