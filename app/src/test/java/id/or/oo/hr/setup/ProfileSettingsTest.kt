@@ -43,7 +43,9 @@ class ProfileSettingsTest {
 
         assertTrue(result.isSuccess)
         assertEquals(
-            listOf("hermes config set model.provider openai-codex && hermes config set model.default gpt-5.6-luna"),
+            listOf("hermes config set model.provider openai-codex && hermes config set model.default gpt-5.6-luna" +
+                " && { hermes config unset model.base_url >/dev/null 2>&1;" +
+                " hermes config unset model.api_key >/dev/null 2>&1; true; }"),
             scripts,
         )
         assertTrue(env.readText().contains("API_SERVER_KEY="))
@@ -56,9 +58,19 @@ class ProfileSettingsTest {
 
         assertEquals(
             "hermes config set model.provider custom && hermes config set model.default m" +
-                " && hermes config set model.base_url $url",
+                " && hermes config set model.base_url $url" +
+                " && hermes config set model.api_key '\${HERMES_CUSTOM_API_KEY}'",
             scripts.single(),
         )
+    }
+
+    @Test
+    fun aBuiltInProviderClearsACustomEndpoint() = runBlocking {
+        settings().useModel("openrouter", "m")
+
+        assertTrue(scripts.single().contains("hermes config unset model.base_url"))
+        assertTrue(scripts.single().contains("hermes config unset model.api_key"))
+        assertTrue(scripts.single().endsWith("true; }"))
     }
 
     @Test
