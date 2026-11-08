@@ -76,14 +76,13 @@ class MainActivity : ComponentActivity() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
             PackageManager.PERMISSION_GRANTED
         ) return
-        val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val prefs = getSharedPreferences(HrApp.PREFS, Context.MODE_PRIVATE)
         if (prefs.getBoolean(NOTIFICATIONS_ASKED, false)) return
         prefs.edit().putBoolean(NOTIFICATIONS_ASKED, true).apply()
         askNotifications()
     }
 
     private companion object {
-        const val PREFS = "hr_prefs"
         const val NOTIFICATIONS_ASKED = "notifications_asked"
     }
 }
