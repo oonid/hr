@@ -53,12 +53,12 @@ fun SetupScreen(app: HrApp, actions: HrActions, modifier: Modifier) {
     ) {
         when (val current = step) {
             SetupStep.Choose -> Choose(controller, actions)
-            is SetupStep.ChatGpt -> ChatGptStep(current, controller)
+            is SetupStep.ChatGpt -> ChatGptStep(current, controller, actions)
             SetupStep.Saving -> Busy("Saving…")
             SetupStep.Testing -> Busy("Restarting the gateway and sending a test request…")
-            is SetupStep.Saved -> Finished("${current.what} saved.", false, controller)
-            is SetupStep.Done -> Finished(describe(current.result), true, controller)
-            is SetupStep.Error -> Finished(current.reason, true, controller)
+            is SetupStep.Saved -> Finished("${current.what} saved.", false, controller, actions)
+            is SetupStep.Done -> Finished(describe(current.result), true, controller, actions)
+            is SetupStep.Error -> Finished(current.reason, true, controller, actions)
         }
     }
 }
@@ -66,29 +66,35 @@ fun SetupScreen(app: HrApp, actions: HrActions, modifier: Modifier) {
 @Composable
 private fun Choose(controller: SetupController, actions: HrActions) {
     Text("ChatGPT", style = MaterialTheme.typography.titleSmall)
-    Button(onClick = controller::chooseChatGpt) { Text("Sign in with ChatGPT") }
-    ApiKeyForm(controller)
-    TelegramForm(controller)
+    Button(onClick = {
+        actions.askNotificationsOnce()
+        controller.chooseChatGpt()
+    }) { Text("Sign in with ChatGPT") }
+    ApiKeyForm(controller, actions)
+    TelegramForm(controller, actions)
     Text("Test", style = MaterialTheme.typography.titleSmall)
-    Button(onClick = controller::test) { Text("Test") }
+    Button(onClick = {
+        actions.askNotificationsOnce()
+        controller.test()
+    }) { Text("Test") }
     Text("Advanced", style = MaterialTheme.typography.titleSmall)
     Text(ADVANCED)
     OutlinedButton(onClick = actions.openTerminal) { Text("Terminal") }
 }
 
 @Composable
-private fun ChatGptStep(step: SetupStep.ChatGpt, controller: SetupController) {
+private fun ChatGptStep(step: SetupStep.ChatGpt, controller: SetupController, actions: HrActions) {
     when (val login = step.login) {
         LoginState.Idle, LoginState.Starting -> {
             Busy("Checking your ChatGPT sign-in…")
             OutlinedButton(onClick = controller::cancelLogin) { Text("Cancel") }
         }
         is LoginState.Waiting -> Waiting(login, controller)
-        LoginState.LoggedIn -> LoggedIn(step, controller)
-        LoginState.Cancelled -> Retry("Sign-in cancelled.", controller)
-        is LoginState.Failed -> Retry(login.reason, controller)
+        LoginState.LoggedIn -> LoggedIn(step, controller, actions)
+        LoginState.Cancelled -> Retry("Sign-in cancelled.", controller, actions)
+        is LoginState.Failed -> Retry(login.reason, controller, actions)
     }
-    OutlinedButton(onClick = controller::back) { Text("Back") }
+    if (step.login !is LoginState.Waiting) OutlinedButton(onClick = controller::back) { Text("Back") }
 }
 
 @Composable
@@ -117,7 +123,7 @@ private fun Waiting(login: LoginState.Waiting, controller: SetupController) {
 }
 
 @Composable
-private fun LoggedIn(step: SetupStep.ChatGpt, controller: SetupController) {
+private fun LoggedIn(step: SetupStep.ChatGpt, controller: SetupController, actions: HrActions) {
     if (step.loadingModels) {
         Busy("Reading your models…")
         return
@@ -128,13 +134,19 @@ private fun LoggedIn(step: SetupStep.ChatGpt, controller: SetupController) {
     } else {
         FormField("Model", model) { model = it }
     }
-    Button(onClick = { controller.saveCodexModel(model.trim()) }, enabled = model.isNotBlank()) { Text("Save") }
+    Button(onClick = {
+        actions.askNotificationsOnce()
+        controller.saveCodexModel(model.trim())
+    }, enabled = model.isNotBlank()) { Text("Save") }
 }
 
 @Composable
-private fun Retry(message: String, controller: SetupController) {
+private fun Retry(message: String, controller: SetupController, actions: HrActions) {
     Text(message)
-    Button(onClick = controller::chooseChatGpt) { Text("Sign in again") }
+    Button(onClick = {
+        actions.askNotificationsOnce()
+        controller.chooseChatGpt()
+    }) { Text("Sign in again") }
 }
 
 @Composable
@@ -146,11 +158,14 @@ private fun Busy(message: String) {
 }
 
 @Composable
-private fun Finished(message: String, again: Boolean, controller: SetupController) {
+private fun Finished(message: String, again: Boolean, controller: SetupController, actions: HrActions) {
     Text(message)
     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         OutlinedButton(onClick = controller::back) { Text("Back") }
-        if (again) Button(onClick = controller::test) { Text("Test again") }
+        if (again) Button(onClick = {
+            actions.askNotificationsOnce()
+            controller.test()
+        }) { Text("Test again") }
     }
 }
 

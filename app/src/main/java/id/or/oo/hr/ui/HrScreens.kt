@@ -20,6 +20,7 @@ class HrActions(
     val startGateway: () -> Unit,
     val openTerminal: () -> Unit,
     val askNotifications: () -> Unit,
+    val askNotificationsOnce: () -> Unit,
 )
 
 enum class Screen(val title: String) { Home("hr"), Logs("Gateway log"), Settings("Settings"), Setup("Setup") }

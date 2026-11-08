@@ -54,6 +54,7 @@ class MainActivity : ComponentActivity() {
                 }
             },
             askNotifications = ::askNotifications,
+            askNotificationsOnce = ::askNotificationsOnce,
         )
         setContent { HrTheme { HrScreens(app, actions) } }
     }
