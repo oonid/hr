@@ -291,6 +291,37 @@ class CodexLoginTest {
     }
 
     @Test
+    fun aLoginThatNeverEndsFailsAtItsBoundAndClosesTheTaskOnce() {
+        val run = Run()
+        val bounded = CodexLogin(
+            HermesCommand(
+                { _, _ ->
+                    run.started.complete(Unit)
+                    try {
+                        awaitCancellation()
+                    } catch (e: CancellationException) {
+                        run.cancelled.complete(Unit)
+                        throw e
+                    }
+                },
+                profile,
+            ),
+            holder,
+            scope,
+            limitMs = 50,
+        )
+
+        bounded.start()
+        val failed = runBlocking { withTimeout(5_000) { bounded.state.first { it is LoginState.Failed } } }
+
+        assertEquals(LoginState.Failed("the sign-in code expired; sign in again"), failed)
+        runBlocking { withTimeout(5_000) { run.cancelled.await() } }
+        waitFor { holder.closed == 1 }
+        assertEquals(1, holder.closed)
+        assertEquals(LoginState.Failed("the sign-in code expired; sign in again"), bounded.state.value)
+    }
+
+    @Test
     fun checkIsTrueOnlyForLoggedIn() {
         assertTrue(checkWith("  openai-codex: logged in  ", 0))
         assertFalse(checkWith("openai-codex: logged out", 0))
