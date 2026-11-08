@@ -3,6 +3,9 @@ package id.or.oo.hr.setup
 import id.or.oo.pr.session.Bind
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -16,6 +19,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.concurrent.atomic.AtomicInteger
 
 class CodexLoginTest {
 
@@ -23,15 +27,17 @@ class CodexLoginTest {
     private val scope = CoroutineScope(Dispatchers.Default + Job())
 
     private class Holder : TaskHolder {
-        var begun = 0
-        var closed = 0
+        val begunCount = AtomicInteger()
+        val closedCount = AtomicInteger()
+        val begun get() = begunCount.get()
+        val closed get() = closedCount.get()
         var label = ""
         var onCancel: () -> Unit = {}
         override fun begin(label: String, onCancel: () -> Unit): AutoCloseable {
-            begun++
+            begunCount.incrementAndGet()
             this.label = label
             this.onCancel = onCancel
-            return AutoCloseable { closed++ }
+            return AutoCloseable { closedCount.incrementAndGet() }
         }
     }
 
@@ -137,6 +143,7 @@ class CodexLoginTest {
         fake.failure = IllegalStateException("no container")
         login.start()
         assertEquals(LoginState.Failed("no container"), await { it is LoginState.Failed })
+        waitFor { holder.closed == 1 }
         assertEquals(1, holder.closed)
     }
 
@@ -208,15 +215,79 @@ class CodexLoginTest {
         assertEquals(1, fake.scripts.size)
     }
 
+    private class Run {
+        val started = CompletableDeferred<Unit>()
+        val cancelled = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Int>()
+    }
+
+    private fun stubbornLogin(vararg runs: Run): CodexLogin {
+        val queue = ArrayDeque(runs.toList())
+        val cmd = HermesCommand(
+            { _, _ ->
+                val run = synchronized(queue) { queue.removeFirst() }
+                run.started.complete(Unit)
+                try {
+                    awaitCancellation()
+                } catch (e: CancellationException) {
+                    run.cancelled.complete(Unit)
+                    withContext(NonCancellable) { run.release.await() }
+                }
+            },
+            profile,
+        )
+        return CodexLogin(cmd, holder, scope)
+    }
+
+    private fun released(run: Run) = runBlocking { withTimeout(5_000) { run.cancelled.await() } }
+
     @Test
-    fun aFinishedLoginCanStartAgain() {
-        login.start()
-        fake.exit.complete(1)
-        await { it is LoginState.Failed }
+    fun anExitAfterCancelDoesNotReplaceCancelled() {
+        for (code in listOf(0, 1)) {
+            val run = Run()
+            val stubborn = stubbornLogin(run)
+            val before = holder.closed
+            stubborn.start()
+            runBlocking { withTimeout(5_000) { run.started.await() } }
+            stubborn.cancel()
+            released(run)
+            run.release.complete(code)
+            waitFor { holder.closed == before + 1 }
+            assertEquals(LoginState.Cancelled, stubborn.state.value)
+        }
+    }
+
+    @Test
+    fun anOldLoginsLateExitDoesNotChangeTheNewLogin() {
+        val first = Run()
+        val second = Run()
+        val stubborn = stubbornLogin(first, second)
+        stubborn.start()
+        runBlocking { withTimeout(5_000) { first.started.await() } }
+        stubborn.cancel()
+        released(first)
+        stubborn.start()
+        runBlocking { withTimeout(5_000) { second.started.await() } }
+        first.release.complete(0)
         waitFor { holder.closed == 1 }
-        login.start()
+        assertEquals(LoginState.Starting, stubborn.state.value)
+    }
+
+    @Test
+    fun aCancelledLoginCanStartAgain() {
+        val first = Run()
+        val second = Run()
+        val again = stubbornLogin(first, second)
+        again.start()
+        runBlocking { withTimeout(5_000) { first.started.await() } }
+        again.cancel()
+        released(first)
+        first.release.complete(1)
+        waitFor { holder.closed == 1 }
+        again.start()
+        runBlocking { withTimeout(5_000) { second.started.await() } }
         assertEquals(2, holder.begun)
-        assertEquals(LoginState.Starting, login.state.value)
+        assertEquals(LoginState.Starting, again.state.value)
     }
 
     @Test
@@ -225,13 +296,14 @@ class CodexLoginTest {
         assertFalse(checkWith("openai-codex: logged out", 0))
         assertFalse(checkWith("not openai-codex: logged in", 0))
         assertFalse(checkWith("", 1))
-        assertEquals(LoginState.Idle, login.state.value)
     }
 
     private fun checkWith(line: String, code: Int): Boolean {
         val scripts = mutableListOf<String>()
         val cmd = HermesCommand({ args, onLine -> scripts += args.last(); onLine(line); code }, profile)
-        val result = runBlocking { CodexLogin(cmd, holder, scope).check() }
+        val checked = CodexLogin(cmd, holder, scope)
+        val result = runBlocking { checked.check() }
+        assertEquals(LoginState.Idle, checked.state.value)
         assertEquals(listOf("hermes auth status openai-codex"), scripts)
         return result
     }
