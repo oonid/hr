@@ -12,6 +12,14 @@ import id.or.oo.hr.image.ImageStore
 import id.or.oo.hr.image.imageInUse
 import id.or.oo.hr.image.UrlHttp
 import id.or.oo.hr.profile.ProfileStore
+import id.or.oo.hr.setup.CodexLogin
+import id.or.oo.hr.setup.ControllerRestart
+import id.or.oo.hr.setup.HermesCommand
+import id.or.oo.hr.setup.ModelCatalog
+import id.or.oo.hr.setup.ProfileSettings
+import id.or.oo.hr.setup.SetupController
+import id.or.oo.hr.setup.TaskHolder
+import id.or.oo.hr.setup.TestRequest
 import id.or.oo.pr.engine.NetworkDns
 import id.or.oo.pr.engine.ProotHost
 import id.or.oo.pr.session.CommandSessionFactory
@@ -90,6 +98,28 @@ class HrApp : Application(), ProotHost, SessionHost {
             LocalGatewayProbe(),
             profiles,
             gatewayLog,
+            gatewayScope,
+        )
+    }
+
+    private val hermesCommand: HermesCommand by lazy { HermesCommand(PrCliCommand(this), profiles.bind()) }
+
+    val setup: SetupController by lazy {
+        val login = CodexLogin(
+            hermesCommand,
+            TaskHolder { label, onCancel ->
+                val task = sessions.beginTask(label, onCancel)
+                AutoCloseable { sessions.endTask(task) }
+            },
+            gatewayScope,
+        )
+        SetupController(
+            login,
+            ModelCatalog(hermesCommand),
+            ProfileSettings(hermesCommand, profiles),
+            TestRequest(UrlHttp(), profiles::apiServerKey),
+            ControllerRestart(gateway.state, gateway::stop, gateway::start),
+            profiles::hasProvider,
             gatewayScope,
         )
     }

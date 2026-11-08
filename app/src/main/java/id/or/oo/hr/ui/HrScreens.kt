@@ -22,7 +22,7 @@ class HrActions(
     val askNotifications: () -> Unit,
 )
 
-enum class Screen(val title: String) { Home("hr"), Logs("Gateway log"), Settings("Settings") }
+enum class Screen(val title: String) { Home("hr"), Logs("Gateway log"), Settings("Settings"), Setup("Setup") }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -45,6 +45,7 @@ fun HrScreens(app: HrApp, actions: HrActions) {
             Screen.Home -> HomeScreen(app, actions, modifier) { screen = it }
             Screen.Logs -> LogsScreen(app, modifier)
             Screen.Settings -> SettingsScreen(app, actions, modifier)
+            Screen.Setup -> SetupScreen(app, actions, modifier)
         }
     }
 }
