@@ -38,26 +38,38 @@ class SetupController(
 ) {
     private val lock = Any()
     private var job: Job? = null
+    private var checking = false
     private val mutableStep = MutableStateFlow<SetupStep>(SetupStep.Choose)
 
     val step: StateFlow<SetupStep> = mutableStep
 
-    fun chooseChatGpt() = begin({ SetupStep.ChatGpt(login.state.value, null, false) }) { followLogin(it) }
+    fun chooseChatGpt() = begin(SetupStep.ChatGpt(LoginState.Starting, null, false), checks = true) { followLogin(it) }
 
-    fun cancelLogin() = login.cancel()
+    fun cancelLogin() {
+        synchronized(lock) {
+            if (checking && mutableStep.value is SetupStep.ChatGpt) {
+                job?.cancel()
+                job = null
+                checking = false
+                mutableStep.value = SetupStep.ChatGpt(LoginState.Cancelled, null, false)
+                return
+            }
+        }
+        login.cancel()
+    }
 
-    fun saveCodexModel(model: String) = begin({ SetupStep.Saving }) { me ->
+    fun saveCodexModel(model: String) = begin(SetupStep.Saving) { me ->
         save(me, false) { settings.useModel(CODEX, model) }
     }
 
     fun chooseApiKey(provider: ApiProvider, key: String, model: String, baseUrl: String?) =
-        begin({ SetupStep.Saving }) { me -> save(me, false) { settings.useApiKey(provider, key, model, baseUrl) } }
+        begin(SetupStep.Saving) { me -> save(me, false) { settings.useApiKey(provider, key, model, baseUrl) } }
 
-    fun saveTelegram(token: String, allowedUsers: String) = begin({ SetupStep.Saving }) { me ->
+    fun saveTelegram(token: String, allowedUsers: String) = begin(SetupStep.Saving) { me ->
         save(me, true) { settings.useTelegram(token, allowedUsers) }
     }
 
-    fun test() = begin({ SetupStep.Testing }) { me ->
+    fun test() = begin(SetupStep.Testing) { me ->
         if (withContext(io) { configured() }) runTest(me) else settle(me, SetupStep.Error(NO_PROVIDER))
     }
 
@@ -67,17 +79,19 @@ class SetupController(
             if (current.busy) return
             job?.cancel()
             job = null
+            checking = false
             mutableStep.value = SetupStep.Choose
             current is SetupStep.ChatGpt
         }
         if (wasChatGpt) login.cancel()
     }
 
-    private fun begin(first: () -> SetupStep, work: suspend (Job) -> Unit) {
+    private fun begin(first: SetupStep, checks: Boolean = false, work: suspend (Job) -> Unit) {
         synchronized(lock) {
             if (mutableStep.value.busy) return
             job?.cancel()
-            mutableStep.value = first()
+            checking = checks
+            mutableStep.value = first
             val next = scope.launch(start = CoroutineStart.LAZY) {
                 val me = coroutineContext[Job]!!
                 try {
@@ -94,13 +108,15 @@ class SetupController(
     }
 
     private suspend fun followLogin(me: Job) {
-        if (login.check()) {
+        val loggedIn = login.check()
+        synchronized(lock) {
+            if (job !== me) return
+            checking = false
+            if (!loggedIn) login.start()
+        }
+        if (loggedIn) {
             onChatGpt(me) { it.copy(login = LoginState.LoggedIn) }
         } else {
-            synchronized(lock) {
-                if (job !== me) return
-                login.start()
-            }
             login.state.first { state ->
                 onChatGpt(me) { it.copy(login = state) }
                 state == LoginState.LoggedIn
