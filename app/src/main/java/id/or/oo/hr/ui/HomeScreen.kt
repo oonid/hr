@@ -60,6 +60,7 @@ fun HomeScreen(app: HrApp, actions: HrActions, modifier: Modifier, open: (Screen
         }
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Button(onClick = actions.openTerminal, enabled = installed != null && canStart) { Text("Terminal") }
+            Button(onClick = { open(Screen.Setup) }, enabled = installed != null && canStart) { Text("Setup") }
             OutlinedButton(onClick = { open(Screen.Settings) }) { Text("Settings") }
         }
         SessionBanners(app)
