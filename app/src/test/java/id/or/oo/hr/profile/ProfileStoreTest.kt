@@ -108,4 +108,21 @@ class ProfileStoreTest {
         assertEquals("the Hermes container has no root at $missing", e.message)
         assertTrue(!missing.exists())
     }
+
+    @Test
+    fun theProfileEnvGetsTheKeyAndKeepsOtherLines() {
+        store.ensureProfile()
+        val env = File(files.profileDir, ".env")
+        env.writeText("TELEGRAM_BOT_TOKEN=x\nFOO=bar\n")
+
+        store.writeProfileEnv(mapOf("OPENROUTER_API_KEY" to "k"))
+
+        val lines = env.readLines()
+        assertTrue(lines.contains("FOO=bar"))
+        assertTrue(lines.contains("TELEGRAM_BOT_TOKEN=x"))
+        assertTrue(lines.contains("OPENROUTER_API_KEY=k"))
+        assertTrue(lines.contains("API_SERVER_KEY=${store.apiServerKey()}"))
+        assertTrue(Regex("[0-9a-f]{64}").matches(store.apiServerKey()))
+        assertEquals("rw-------", permissions(env))
+    }
 }
