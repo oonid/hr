@@ -59,6 +59,7 @@ fun HomeScreen(app: HrApp, actions: HrActions, modifier: Modifier, open: (Screen
             GatewayCard(state, now, canStart, onStart = actions.startGateway, onStop = { app.gateway.stop() })
         }
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Button(onClick = { open(Screen.Chat) }, enabled = installed != null) { Text("Chat") }
             Button(onClick = actions.openTerminal, enabled = installed != null && canStart) { Text("Terminal") }
             Button(onClick = { open(Screen.Setup) }, enabled = installed != null && canStart) { Text("Setup") }
             OutlinedButton(onClick = { open(Screen.Settings) }) { Text("Settings") }

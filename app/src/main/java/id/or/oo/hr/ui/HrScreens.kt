@@ -14,6 +14,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import id.or.oo.hr.HrApp
 
 class HrActions(
@@ -23,20 +24,26 @@ class HrActions(
     val askNotificationsOnce: () -> Unit,
 )
 
-enum class Screen(val title: String) { Home("hr"), Logs("Gateway log"), Settings("Settings"), Setup("Setup") }
+enum class Screen(val title: String) { Home("hr"), Logs("Gateway log"), Settings("Settings"), Setup("Setup"), Chat("Chat") }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HrScreens(app: HrApp, actions: HrActions) {
     var screen by rememberSaveable { mutableStateOf(Screen.Home) }
-    BackHandler(enabled = screen != Screen.Home) { screen = Screen.Home }
+    val chatView by app.chat.view.collectAsStateWithLifecycle()
+    val back = {
+        if (screen == Screen.Chat && chatView != null) app.chat.close() else screen = Screen.Home
+    }
+    BackHandler(enabled = screen != Screen.Home, onBack = back)
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         topBar = {
             TopAppBar(
-                title = { Text(screen.title) },
+                title = {
+                    Text(if (screen == Screen.Chat) chatView?.conversation?.title ?: screen.title else screen.title)
+                },
                 navigationIcon = {
-                    if (screen != Screen.Home) TextButton(onClick = { screen = Screen.Home }) { Text("Back") }
+                    if (screen != Screen.Home) TextButton(onClick = { back() }) { Text("Back") }
                 },
             )
         },
@@ -47,6 +54,7 @@ fun HrScreens(app: HrApp, actions: HrActions) {
             Screen.Logs -> LogsScreen(app, modifier)
             Screen.Settings -> SettingsScreen(app, actions, modifier)
             Screen.Setup -> SetupScreen(app, actions, modifier)
+            Screen.Chat -> ChatScreen(app, actions, modifier)
         }
     }
 }

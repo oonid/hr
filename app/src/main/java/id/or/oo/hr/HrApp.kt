@@ -3,6 +3,9 @@ package id.or.oo.hr
 import android.app.Application
 import android.content.Intent
 import android.net.ConnectivityManager
+import id.or.oo.hr.chat.ChatClient
+import id.or.oo.hr.chat.ChatController
+import id.or.oo.hr.chat.ConversationStore
 import id.or.oo.hr.gateway.GatewayController
 import id.or.oo.hr.gateway.GatewayLaunch
 import id.or.oo.hr.gateway.LocalGatewayProbe
@@ -98,6 +101,15 @@ class HrApp : Application(), ProotHost, SessionHost {
             LocalGatewayProbe(),
             profiles,
             gatewayLog,
+            gatewayScope,
+        )
+    }
+
+    val chat: ChatController by lazy {
+        ChatController(
+            ConversationStore(files.chatsDir),
+            ChatClient(profiles::apiServerKey, profiles::secrets),
+            gateway.state,
             gatewayScope,
         )
     }
