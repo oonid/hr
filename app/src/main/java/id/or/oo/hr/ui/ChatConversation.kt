@@ -4,9 +4,12 @@ import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -31,6 +34,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -53,6 +57,7 @@ fun ChatConversation(app: HrApp, actions: HrActions, view: ChatView, modifier: M
     val dragged = list.interactionSource.collectIsDraggedAsState()
     var follow by remember(conversationId) { mutableStateOf(true) }
     val lastIndex = messages.lastIndex + if (turn != null) 1 else 0
+    val keyboard = WindowInsets.ime.getBottom(LocalDensity.current)
     LaunchedEffect(list, conversationId) {
         var gesture = false
         snapshotFlow { Triple(dragged.value, list.isScrollInProgress, list.canScrollForward) }
@@ -62,7 +67,7 @@ fun ChatConversation(app: HrApp, actions: HrActions, view: ChatView, modifier: M
                 if (!dragging && !scrolling) gesture = false
             }
     }
-    LaunchedEffect(conversationId, lastIndex, turn?.text?.length, turn?.tools?.size, turn?.approval != null) {
+    LaunchedEffect(conversationId, lastIndex, turn?.text?.length, turn?.tools?.size, turn?.approval != null, keyboard) {
         if (follow && lastIndex >= 0) list.scrollToItem(lastIndex, Int.MAX_VALUE)
     }
     Column(modifier = modifier.fillMaxSize().imePadding().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -133,15 +138,33 @@ private fun Running(turn: Turn, app: HrApp) {
                     Text("Hermes wants to run:", style = MaterialTheme.typography.titleSmall)
                     Text(approval.command, fontFamily = FontFamily.Monospace)
                     if (approval.description.isNotEmpty()) Text(approval.description)
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Button(onClick = { app.chat.answer("once") }, enabled = !turn.answering) { Text("Allow once") }
-                        OutlinedButton(onClick = { app.chat.answer("deny") }, enabled = !turn.answering) { Text("Deny") }
-                    }
+                    ApprovalChoices(approval.choices, enabled = !turn.answering) { app.chat.answer(it) }
                 }
             }
         }
     }
 }
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ApprovalChoices(choices: List<String>, enabled: Boolean, onChoice: (String) -> Unit) {
+    val offered = APPROVAL_CHOICES.filter { it.first in choices }
+    if (offered.isEmpty()) {
+        Text("Answer this in the terminal.")
+        return
+    }
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        offered.forEach { (choice, label) ->
+            if (choice == "deny") {
+                OutlinedButton(onClick = { onChoice(choice) }, enabled = enabled) { Text(label) }
+            } else {
+                Button(onClick = { onChoice(choice) }, enabled = enabled) { Text(label) }
+            }
+        }
+    }
+}
+
+private val APPROVAL_CHOICES = listOf("once" to "Allow once", "session" to "Allow for this chat", "deny" to "Deny")
 
 private const val BUBBLE_WIDTH = 0.85f
 
