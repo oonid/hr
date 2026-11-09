@@ -107,22 +107,41 @@ A Kotlin/Compose app, arm64-v8a, minSdk 28, using `:proot-engine`, `:termlib` an
 
 ## 8. Setup (M2)
 
-- **Providers in the form:** OpenRouter, OpenAI (API key), Anthropic, Nous, an OpenAI-compatible
-  endpoint (base URL, key, model), and ChatGPT login.
+- **Providers in the form:** ChatGPT login, OpenRouter, OpenAI (API key), Anthropic and an
+  OpenAI-compatible endpoint (base URL, key, model). Nous signs in by device code and has no API
+  key in Hermes, so it is reached from the terminal (`hermes auth add nous`), as are other
+  providers and platforms via `hermes setup`.
+- **Saving a provider:** keys go only to the profile `.env`, by hr's own file write; model settings
+  go through `hermes config set`.
 - **ChatGPT login:** hr runs `hermes auth add openai-codex` in the container (device code, Hermes's
   default flow), shows the verification URL as a button and the code ready to copy, and waits for
   success. The login is stored in the profile's `auth.json`.
-- **Telegram:** an optional bot token.
-- **Test:** after saving, a one-word request through the gateway confirms the provider works.
+- **Telegram:** an optional bot token and allowed user ids. Save first checks that the image can
+  import the Telegram library; if not, it says the image has no Telegram support and writes
+  nothing. Remove deletes both lines.
+- **Status:** Setup shows the current state of each section, read from the profile's files:
+  ChatGPT signed in or not, and the model; the active API-key provider, model and endpoint host;
+  whether a bot token is saved and how many users are allowed. It never shows a key, token, user
+  id or full URL.
+- **Test:** restarts the gateway and sends a one-word request, which confirms the provider works.
 - **Advanced:** a terminal running `hermes setup`, for every other provider or platform Hermes
   supports.
 
 ## 9. Chat (M3)
 
-- hr stores the conversations and sends the history with each turn to
-  `/p/android/v1/chat/completions`, streaming.
-- `hermes.tool.progress` events show as status lines while a turn runs.
-- Chat needs the gateway; when it is not running, the screen offers to start it.
+- **Sessions:** each conversation has its own Hermes session id, sent as `X-Hermes-Session-Id`.
+  Each turn sends only the new message; Hermes keeps the context, including tool calls and
+  results. hr stores conversations as owner-only files, for display.
+- **Streaming:** replies stream from `/p/android/v1/chat/completions`. `hermes.tool.progress`
+  events show as status lines while a turn runs (labels redacted).
+- **Stop:** drops the connection; Hermes interrupts the agent.
+- **Approvals:** a request shows the command with the choices Hermes offers among Allow once, Allow
+  for this chat and Deny. hr answers through `/runs/{id}/approval` with the pending prompt id and
+  execution generation.
+- **Lost turns:** each turn carries an `Idempotency-Key`. When the gateway dies mid-turn, Hermes
+  pauses the session, and hr resolves the lost turn (`/runs/{id}/resolve-unknown`) before the next
+  message.
+- Chat needs the gateway; when it is not running, the screen says why and offers to start it.
 
 ## 10. Updates (M4)
 
