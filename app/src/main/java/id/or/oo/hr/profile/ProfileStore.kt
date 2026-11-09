@@ -52,30 +52,15 @@ class ProfileStore(private val files: HrFiles, private val random: SecureRandom 
         }
     }
 
-    fun hasProvider(): Boolean {
-        val config = File(files.profileDir, CONFIG)
-        if (!config.isFile) return false
-        var inModel = false
-        var childIndent = -1
-        for (raw in config.readLines()) {
-            val line = raw.substringBefore(" #").trimEnd()
-            if (line.isBlank() || line.trimStart().startsWith("#")) continue
-            val indent = line.length - line.trimStart().length
-            if (indent == 0) {
-                inModel = line == "model:"
-                childIndent = -1
-                continue
-            }
-            if (!inModel) continue
-            if (childIndent < 0) childIndent = indent
-            if (indent != childIndent) continue
-            val entry = line.trim()
-            if (!entry.startsWith("provider:")) continue
-            val value = entry.removePrefix("provider:").trim().removeSurrounding("\"").removeSurrounding("'")
-            if (value.isNotEmpty()) return true
+    fun removeFromProfileEnv(names: Set<String>) {
+        synchronized(lock) {
+            val env = File(files.profileDir, ".env")
+            if (!env.isFile) return
+            writePrivate(env, withoutEnvKeys(env.readText(), names))
         }
-        return false
     }
+
+    fun hasProvider(): Boolean = !modelSettings(File(files.profileDir, CONFIG))["provider"].isNullOrEmpty()
 
     private fun listenerSettings(): Map<String, String> = linkedMapOf(
         "API_SERVER_ENABLED" to "true",
@@ -95,16 +80,12 @@ class ProfileStore(private val files: HrFiles, private val random: SecureRandom 
     }
 
     private fun secretValues(text: String): List<String> =
-        text.replace("\r", "").split('\n').mapNotNull { line ->
-            val assignment = line.trim().removePrefix("export ").trimStart()
-            val name = assignment.substringBefore('=').trim()
-            val value = assignment.substringAfter('=', "").trim().trim('"', '\'')
-            value.takeIf { it.isNotEmpty() && SECRET_SUFFIXES.any { name.endsWith(it) } }
+        parseEnv(text).mapNotNull { (name, value) ->
+            value.takeIf { it.isNotEmpty() && SECRET_SUFFIXES.any { suffix -> name.endsWith(suffix) } }
         }
 
     private companion object {
         val KEY_FORMAT = Regex("[0-9a-f]{64}")
-        const val CONFIG = "config.yaml"
         val SECRET_SUFFIXES = listOf("_KEY", "_TOKEN", "_PASSWORD", "_SECRET")
     }
 }
