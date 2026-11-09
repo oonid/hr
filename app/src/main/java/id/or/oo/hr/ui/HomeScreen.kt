@@ -2,7 +2,8 @@ package id.or.oo.hr.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -32,6 +33,7 @@ import id.or.oo.hr.image.InstalledImage
 import id.or.oo.hr.image.canStartSession
 import kotlinx.coroutines.delay
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun HomeScreen(app: HrApp, actions: HrActions, modifier: Modifier, open: (Screen) -> Unit) {
     val installed by app.images.installed.collectAsStateWithLifecycle()
@@ -58,7 +60,7 @@ fun HomeScreen(app: HrApp, actions: HrActions, modifier: Modifier, open: (Screen
         if (installed != null) {
             GatewayCard(state, now, canStart, onStart = actions.startGateway, onStop = { app.gateway.stop() })
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = { open(Screen.Chat) }, enabled = installed != null) { Text("Chat") }
             Button(onClick = actions.openTerminal, enabled = installed != null && canStart) { Text("Terminal") }
             Button(onClick = { open(Screen.Setup) }, enabled = installed != null && canStart) { Text("Setup") }

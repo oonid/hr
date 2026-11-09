@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -48,7 +49,7 @@ fun SetupScreen(app: HrApp, actions: HrActions, modifier: Modifier) {
     val controller = app.setup
     val step by controller.step.collectAsStateWithLifecycle()
     Column(
-        modifier = modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(12.dp),
+        modifier = modifier.fillMaxWidth().verticalScroll(rememberScrollState()).imePadding().padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         when (val current = step) {
