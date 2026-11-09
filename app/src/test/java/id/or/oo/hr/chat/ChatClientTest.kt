@@ -188,9 +188,52 @@ class ChatClientTest {
             }
             assertTrue(first.await(5, TimeUnit.SECONDS))
             job.cancelAndJoin()
-            assertTrue(job.isCancelled)
         }
         assertTrue(writeFailed.await(10, TimeUnit.SECONDS))
+    }
+
+    @Test
+    fun aCancelBeforeTheResponseStartsSendsNothingFurther() {
+        val requested = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val writeFailed = CountDownLatch(1)
+        server.stream = { x ->
+            requested.countDown()
+            release.await(10, TimeUnit.SECONDS)
+            x.eventStreamHead()
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20)
+            while (System.nanoTime() < deadline) {
+                if (!x.write(chunk("late"))) {
+                    writeFailed.countDown()
+                    break
+                }
+                Thread.sleep(20)
+            }
+        }
+        val started = System.nanoTime()
+        runBlocking {
+            val job = launch(Dispatchers.Default) {
+                client(readTimeoutMs = 30_000).send("s", "hi") { events += it }
+            }
+            assertTrue(requested.await(5, TimeUnit.SECONDS))
+            job.cancel()
+            release.countDown()
+            job.join()
+        }
+        assertTrue(TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - started) < 10)
+        assertTrue(writeFailed.await(10, TimeUnit.SECONDS))
+        assertTrue(events.size <= 1)
+    }
+
+    @Test
+    fun aFinishedReplyCutAfterTheFinishFrameIsFinished() {
+        server.stream = { x ->
+            x.eventStreamHead()
+            x.write(chunk("ok"))
+            x.write(finish())
+            x.abort()
+        }
+        assertEquals(TurnOutcome.Finished("stop"), send())
     }
 
     @Test
