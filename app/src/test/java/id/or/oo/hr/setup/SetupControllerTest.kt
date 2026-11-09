@@ -5,6 +5,8 @@ import id.or.oo.hr.gateway.GatewayController
 import id.or.oo.hr.image.Http
 import id.or.oo.hr.image.HttpResponse
 import id.or.oo.hr.profile.ProfileStore
+import id.or.oo.hr.profile.SetupStatus
+import id.or.oo.hr.profile.readStatus
 import id.or.oo.pr.session.Bind
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -104,6 +106,8 @@ class SetupControllerTest {
 
     private val login = CodexLogin(command, { _, _ -> AutoCloseable {} }, scope)
     private val store by lazy { ProfileStore(HrFiles(tmp.root)) }
+    private val empty = SetupStatus(false, null, null, null, emptySet(), false, 0)
+    private var shown: SetupStatus? = null
     private val controller by lazy {
         SetupController(
             login,
@@ -113,6 +117,7 @@ class SetupControllerTest {
             { calls += "restart"; restartWith() },
             { configured },
             scope,
+            readStatus = { shown ?: readStatus(HrFiles(tmp.root).profileDir) },
         )
     }
 
@@ -395,5 +400,76 @@ class SetupControllerTest {
         assertFalse("login" in calls)
         assertEquals(LoginState.Idle, login.state.value)
         assertEquals(SetupStep.ChatGpt(LoginState.Cancelled, null, false), controller.step.value)
+    }
+
+    private fun awaitStatus(match: (SetupStatus) -> Boolean): SetupStatus = runBlocking {
+        withTimeout(5_000) { controller.status.first(match) }
+    }
+
+    @Test
+    fun statusIsReadAtStartAndAfterASave() {
+        val before = SetupStatus(true, "openai-codex", "gpt-6.1-sol", null, emptySet(), false, 0)
+        val after = before.copy(model = "gpt-5.6-luna")
+        shown = before
+        assertEquals(before, awaitStatus { it == before })
+
+        shown = after
+        controller.saveCodexModel("gpt-5.6-luna")
+
+        await { it is SetupStep.Done }
+        assertEquals(after, controller.status.value)
+    }
+
+    @Test
+    fun statusStartsEmptyAndRefreshes() {
+        val later = empty.copy(telegramToken = true, telegramUsers = 2)
+        shown = empty
+        assertEquals(empty, controller.status.value)
+        awaitStatus { true }
+
+        shown = later
+        controller.refreshStatus()
+
+        assertEquals(later, awaitStatus { it == later })
+    }
+
+    @Test
+    fun aFinishedLoginRefreshesTheStatus() {
+        val signedIn = empty.copy(chatGpt = true)
+        shown = empty
+        controller.chooseChatGpt()
+        await { it is SetupStep.ChatGpt && it.login is LoginState.Waiting }
+        shown = signedIn
+
+        loginExit.complete(0)
+
+        assertEquals(signedIn, awaitStatus { it == signedIn })
+    }
+
+    @Test
+    fun removeTelegramClearsBothLinesAndRefreshes() {
+        store.ensureProfile()
+        store.writeProfileEnv(mapOf("TELEGRAM_BOT_TOKEN" to "1:a", "TELEGRAM_ALLOWED_USERS" to "5,6"))
+        awaitStatus { it.telegramToken && it.telegramUsers == 2 }
+
+        controller.removeTelegram()
+
+        assertEquals(answered, await { it is SetupStep.Done })
+        assertFalse(controller.status.value.telegramToken)
+        assertEquals(0, controller.status.value.telegramUsers)
+        assertTrue("restart" in calls)
+    }
+
+    @Test
+    fun removeTelegramWithoutAProviderIsSaved() {
+        configured = false
+        store.ensureProfile()
+        store.writeProfileEnv(mapOf("TELEGRAM_BOT_TOKEN" to "1:a"))
+
+        controller.removeTelegram()
+
+        assertEquals(SetupStep.Saved("Telegram removed"), await { it is SetupStep.Saved })
+        assertFalse("restart" in calls)
+        assertFalse(controller.status.value.telegramToken)
     }
 }

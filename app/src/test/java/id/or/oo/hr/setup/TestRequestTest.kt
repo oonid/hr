@@ -226,4 +226,23 @@ class TestRequestTest {
         }
         assertFalse(env.exists())
     }
+
+    @Test
+    fun removingTelegramDropsBothLinesAndKeepsOtherKeys() = runBlocking {
+        store.writeProfileEnv(
+            mapOf("TELEGRAM_BOT_TOKEN" to "1:a", "TELEGRAM_ALLOWED_USERS" to "5", "OPENROUTER_API_KEY" to "k"),
+        )
+
+        val result = settings.removeTelegram()
+
+        assertTrue(result.isSuccess)
+        val lines = env.readText().lines()
+        assertTrue(lines.contains("OPENROUTER_API_KEY=k"))
+        assertTrue(lines.none { it.startsWith("TELEGRAM_") })
+    }
+
+    @Test
+    fun removingTelegramWithoutAnEnvFileSucceeds() = runBlocking {
+        assertTrue(settings.removeTelegram().isSuccess)
+    }
 }

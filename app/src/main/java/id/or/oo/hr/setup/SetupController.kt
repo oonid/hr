@@ -1,5 +1,6 @@
 package id.or.oo.hr.setup
 
+import id.or.oo.hr.profile.SetupStatus
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -34,6 +35,7 @@ class SetupController(
     private val restart: GatewayRestart,
     private val configured: () -> Boolean,
     private val scope: CoroutineScope,
+    private val readStatus: () -> SetupStatus,
     private val io: CoroutineDispatcher = Dispatchers.IO,
 ) {
     private val lock = Any()
@@ -41,7 +43,18 @@ class SetupController(
     private var checking = false
     private val mutableStep = MutableStateFlow<SetupStep>(SetupStep.Choose)
 
+    private val mutableStatus = MutableStateFlow(SetupStatus(false, null, null, null, emptySet(), false, 0))
+
     val step: StateFlow<SetupStep> = mutableStep
+    val status: StateFlow<SetupStatus> = mutableStatus
+
+    init {
+        refreshStatus()
+    }
+
+    fun refreshStatus() {
+        scope.launch(io) { refresh() }
+    }
 
     fun chooseChatGpt() = begin(SetupStep.ChatGpt(LoginState.Starting, null, false), checks = true) { followLogin(it) }
 
@@ -67,6 +80,18 @@ class SetupController(
 
     fun saveTelegram(token: String, allowedUsers: String) = begin(SetupStep.Saving) { me ->
         save(me, true) { settings.useTelegram(token, allowedUsers) }
+    }
+
+    fun removeTelegram() = begin(SetupStep.Saving) { me ->
+        val failure = withContext(io) { settings.removeTelegram() }.exceptionOrNull()
+        if (failure != null) return@begin settle(me, SetupStep.Error(failure.message ?: failure.javaClass.simpleName))
+        refresh()
+        if (withContext(io) { configured() }) {
+            settle(me, SetupStep.Testing)
+            runTest(me)
+        } else {
+            settle(me, SetupStep.Saved("Telegram removed"))
+        }
     }
 
     fun test() = begin(SetupStep.Testing) { me ->
@@ -122,6 +147,7 @@ class SetupController(
                 state == LoginState.LoggedIn
             }
         }
+        refresh()
         onChatGpt(me) { it.copy(loadingModels = true) }
         val models = catalog.codexModels()
         onChatGpt(me) { it.copy(models = models, loadingModels = false) }
@@ -129,6 +155,7 @@ class SetupController(
 
     private suspend fun save(me: Job, telegram: Boolean, write: suspend () -> Result<Unit>) {
         val failure = withContext(io) { write() }.exceptionOrNull()
+        refresh()
         when {
             failure != null -> settle(me, SetupStep.Error(failure.message ?: failure.javaClass.simpleName))
             telegram && !withContext(io) { configured() } -> settle(me, SetupStep.Saved(TELEGRAM))
@@ -137,6 +164,10 @@ class SetupController(
                 runTest(me)
             }
         }
+    }
+
+    private suspend fun refresh() {
+        mutableStatus.value = withContext(io) { readStatus() }
     }
 
     private suspend fun runTest(me: Job) {
