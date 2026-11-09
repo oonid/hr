@@ -7,7 +7,7 @@ private const val CUSTOM = "custom"
 
 private val SAFE_VALUE = Regex("^[A-Za-z0-9._:/@+][A-Za-z0-9._:/@+-]*$")
 
-class ProfileSettings(private val command: HermesCommand, internal val profiles: ProfileStore) {
+class ProfileSettings(internal val command: HermesCommand, internal val profiles: ProfileStore) {
 
     suspend fun useModel(provider: String, model: String, baseUrl: String? = null): Result<Unit> {
         checkValues(provider, model, baseUrl)?.let { return Result.failure(it) }
