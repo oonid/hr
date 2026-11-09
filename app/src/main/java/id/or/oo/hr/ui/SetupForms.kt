@@ -30,6 +30,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import id.or.oo.hr.profile.SetupStatus
 import id.or.oo.hr.setup.ApiProvider
 import id.or.oo.hr.setup.SetupController
+import id.or.oo.hr.setup.otherProviderLine
 
 @Composable
 fun ApiKeyForm(status: SetupStatus, controller: SetupController, actions: HrActions) {
@@ -41,6 +42,7 @@ fun ApiKeyForm(status: SetupStatus, controller: SetupController, actions: HrActi
     var baseUrl by rememberSaveable { mutableStateOf("") }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("API key", style = MaterialTheme.typography.titleSmall)
+        otherProviderLine(status)?.let { Text(it) }
         if (active != null) Text(apiLine(active, status))
         Dropdown("Provider", ApiProvider.entries.map { it.label }, provider.label) { label ->
             chosen = ApiProvider.entries.first { it.label == label }.id

@@ -476,7 +476,7 @@ class SetupControllerTest {
 
         controller.removeTelegram()
 
-        assertEquals(SetupStep.Saved("Telegram removed."), await { it is SetupStep.Saved })
+        assertEquals(SetupStep.Saved("Telegram removed. It takes effect when the gateway restarts."), await { it is SetupStep.Saved })
         assertFalse("restart" in calls)
         assertEquals(empty, controller.status.value)
     }

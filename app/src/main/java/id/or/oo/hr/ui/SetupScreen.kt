@@ -18,7 +18,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -32,12 +31,15 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import id.or.oo.hr.HrApp
 import id.or.oo.hr.profile.SetupStatus
 import id.or.oo.hr.setup.LoginState
 import id.or.oo.hr.setup.SetupController
 import id.or.oo.hr.setup.SetupStep
+import id.or.oo.hr.setup.chatGptButton
+import id.or.oo.hr.setup.chatGptLine
 import id.or.oo.hr.setup.TestResult
 import kotlinx.coroutines.launch
 
@@ -51,7 +53,10 @@ fun SetupScreen(app: HrApp, actions: HrActions, modifier: Modifier) {
     val controller = app.setup
     val step by controller.step.collectAsStateWithLifecycle()
     val status by controller.status.collectAsStateWithLifecycle()
-    LaunchedEffect(Unit) { controller.refreshStatus() }
+    LifecycleResumeEffect(Unit) {
+        controller.refreshStatus()
+        onPauseOrDispose { }
+    }
     Column(
         modifier = modifier.fillMaxWidth().verticalScroll(rememberScrollState()).imePadding().padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -75,7 +80,7 @@ private fun Choose(status: SetupStatus, controller: SetupController, actions: Hr
     Button(onClick = {
         actions.askNotificationsOnce()
         controller.chooseChatGpt()
-    }) { Text(if (status.chatGpt) "Change model" else "Sign in with ChatGPT") }
+    }) { Text(chatGptButton(status)) }
     ApiKeyForm(status, controller, actions)
     TelegramForm(status, controller, actions)
     Text("Test", style = MaterialTheme.typography.titleSmall)
@@ -180,11 +185,4 @@ private fun describe(result: TestResult): String = when (result) {
     is TestResult.Rejected -> "The gateway refused the request (HTTP ${result.code}): ${result.body}"
     TestResult.NoGateway -> "hr's gateway is not running."
     is TestResult.Failed -> result.reason
-}
-
-private fun chatGptLine(status: SetupStatus): String = when {
-    !status.chatGpt -> "Not signed in"
-    status.provider != "openai-codex" -> "Signed in (another provider is active)"
-    status.model != null -> "Signed in · ${status.model}"
-    else -> "Signed in"
 }

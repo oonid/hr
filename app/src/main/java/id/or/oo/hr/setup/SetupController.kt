@@ -93,7 +93,7 @@ class SetupController(
             settle(me, SetupStep.Testing)
             runTest(me)
         } else {
-            settle(me, SetupStep.Saved("Telegram removed."))
+            settle(me, SetupStep.Saved("Telegram removed. It takes effect when the gateway restarts."))
         }
     }
 
