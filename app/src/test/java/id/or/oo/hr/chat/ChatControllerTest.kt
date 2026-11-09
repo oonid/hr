@@ -74,7 +74,15 @@ class ChatControllerTest {
     }
 
     private var dir: File? = null
-    private val store by lazy { ConversationStore(dir ?: File(tmp.root, "chats")) }
+    private var failList = false
+    private val store by lazy {
+        object : ConversationStore(dir ?: File(tmp.root, "chats")) {
+            override fun list(): List<Conversation> {
+                if (failList) throw IOException("list failed")
+                return super.list()
+            }
+        }
+    }
     private val controller by lazy {
         ChatController(
             store,
@@ -139,7 +147,7 @@ class ChatControllerTest {
         assertTrue(chat.messages.isEmpty())
         assertNull(store.load(chat.id))
 
-        controller.send("  hi there  ")
+        assertTrue(controller.send("  hi there  "))
         val call = nextCall()
         assertEquals("hr-id-2", call.sessionId)
         assertEquals("hi there", call.text)
@@ -224,7 +232,7 @@ class ChatControllerTest {
     fun aGatewayThatIsNotRunningSendsNothing() {
         gateway.value = GatewayState.Starting(5L)
         val chat = open()
-        controller.send("hi")
+        assertFalse(controller.send("hi"))
         val view = controller.view.value!!
         assertEquals("the gateway is not running", view.error)
         assertTrue(view.conversation.messages.isEmpty())
@@ -233,21 +241,84 @@ class ChatControllerTest {
         assertTrue(calls.tryReceive().isFailure)
 
         gateway.value = GatewayState.Running(6L, null)
-        controller.send("again")
+        assertTrue(controller.send("again"))
         assertEquals("again", nextCall().text)
         assertNull(controller.view.value!!.error)
     }
 
     @Test
     fun blankTextOrNoChatSendsNothing() {
-        controller.send("hi")
+        assertFalse(controller.send("hi"))
         assertNull(controller.view.value)
         open()
-        controller.send("   \n ")
+        assertFalse(controller.send("   \n "))
         assertTrue(controller.view.value!!.conversation.messages.isEmpty())
         assertNull(controller.view.value!!.turn)
-        controller.send("real")
+        assertTrue(controller.send("real"))
         assertEquals("real", nextCall().text)
+        assertFalse(controller.send("while running"))
+        assertEquals("real", controller.view.value!!.conversation.messages.single().text)
+    }
+
+    @Test
+    fun aListThatFailsAfterASaveDoesNotBlockTheTurn() {
+        val chat = open()
+        awaitList { true }
+        drain()
+        failList = true
+        assertTrue(controller.send("hi"))
+        val call = nextCall()
+        call.onEvent(ChatEvent.Text("ok"))
+        awaitView { it?.turn?.text == "ok" }
+        call.outcome.complete(TurnOutcome.Finished("stop"))
+        val done = ended(chat.id, 2)
+        assertNull(done.error)
+    }
+
+    @Test
+    fun runningIdNamesTheConversationBeingAnswered() {
+        val chat = open()
+        assertNull(controller.runningId.value)
+        controller.send("hi")
+        assertEquals(chat.id, controller.runningId.value)
+        val call = nextCall()
+        controller.newChat()
+        assertEquals(chat.id, controller.runningId.value)
+        call.outcome.complete(TurnOutcome.Finished("stop"))
+        runBlocking { withTimeout(5_000) { controller.runningId.first { it == null } } }
+    }
+
+    @Test
+    fun textOrToolsFromHermesClearAStaleApproval() {
+        open()
+        controller.send("go")
+        val call = nextCall()
+        val approval = ChatEvent.Approval("run-1", "a", "rm x", "", listOf("once", "deny"))
+        call.onEvent(approval)
+        awaitView { it?.turn?.approval != null }
+        call.onEvent(ChatEvent.Text("resolved"))
+        val afterText = awaitView { it?.turn?.text == "resolved" }!!
+        assertNull(afterText.turn!!.approval)
+        assertFalse(afterText.turn!!.answering)
+        call.onEvent(approval)
+        awaitView { it?.turn?.approval != null }
+        call.onEvent(ChatEvent.Tool("c1", "ls", true))
+        assertNull(awaitView { it?.turn?.tools?.size == 1 }!!.turn!!.approval)
+    }
+
+    @Test
+    fun aGatewayThatStopsMidReplySaysSo() {
+        for (outcome in listOf(TurnOutcome.Broken("unexpected end of stream"), TurnOutcome.NoGateway)) {
+            gateway.value = GatewayState.Running(1L, null)
+            val chat = open()
+            controller.send("hi")
+            val call = nextCall()
+            call.onEvent(ChatEvent.Text("part"))
+            awaitView { it?.turn?.text == "part" }
+            gateway.value = GatewayState.Stopped()
+            call.outcome.complete(outcome)
+            assertEquals("the gateway stopped during the reply", ended(chat.id, 2).error)
+        }
     }
 
     @Test

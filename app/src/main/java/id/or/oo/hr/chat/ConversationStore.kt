@@ -25,9 +25,9 @@ private val ID_PATTERN = Regex("^[A-Za-z0-9-]{1,64}$")
 private const val EXTENSION = ".json"
 private const val TITLE_LIMIT = 40
 
-class ConversationStore(private val dir: File) {
+open class ConversationStore(private val dir: File) {
 
-    fun list(): List<Conversation> {
+    open fun list(): List<Conversation> {
         val files = dir.listFiles() ?: return emptyList()
         return files
             .filter { it.isFile && it.name.endsWith(EXTENSION) }
