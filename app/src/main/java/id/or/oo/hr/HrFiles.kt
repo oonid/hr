@@ -7,6 +7,7 @@ class HrFiles(filesDir: File) {
     val homeDir = File(filesDir, "home")
     val hrDir = File(filesDir, "hr")
     val profileDir = File(hrDir, "profile")
+    val chatsDir = File(hrDir, "chats")
     val keyFile = File(hrDir, "api_server_key")
     val imageRecord = File(hrDir, "image.properties")
 
