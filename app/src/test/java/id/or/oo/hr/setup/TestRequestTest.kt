@@ -30,8 +30,27 @@ class TestRequestTest {
     private val url get() = "http://127.0.0.1:${server.port}/p/android/v1/chat/completions"
     private val files by lazy { HrFiles(tmp.root) }
     private val store by lazy { ProfileStore(files).also { it.ensureProfile() } }
+    private var telegramInstalled = true
+    private val scripts = mutableListOf<String>()
     private val settings by lazy {
-        ProfileSettings(HermesCommand({ _, _ -> 0 }, Bind("/host/profile", "/root/.hermes/profiles/android")), store)
+        ProfileSettings(
+            HermesCommand(
+                { args, onLine ->
+                    scripts += args.last()
+                    if (args.last() == TELEGRAM_CHECK_SCRIPT && telegramInstalled) {
+                        onLine(TELEGRAM_PRESENT)
+                        0
+                    } else if (args.last() == TELEGRAM_CHECK_SCRIPT) {
+                        onLine("ModuleNotFoundError: No module named 'telegram'")
+                        1
+                    } else {
+                        0
+                    }
+                },
+                Bind("/host/profile", "/root/.hermes/profiles/android"),
+            ),
+            store,
+        )
     }
     private val env get() = File(files.profileDir, ".env")
 
@@ -173,6 +192,28 @@ class TestRequestTest {
         val lines = env.readText().lines()
         assertTrue(lines.contains("TELEGRAM_BOT_TOKEN=123:abc"))
         assertTrue(lines.contains("TELEGRAM_ALLOWED_USERS=7,8"))
+    }
+
+    @Test
+    fun telegramWithoutItsLibraryInTheImageWritesNothing() = runBlocking {
+        telegramInstalled = false
+
+        val result = settings.useTelegram("123:abc", "1")
+
+        assertEquals(
+            "this Hermes image has no Telegram support; install a newer image",
+            result.exceptionOrNull()?.message,
+        )
+        assertEquals(listOf(TELEGRAM_CHECK_SCRIPT), scripts)
+        assertFalse(env.exists())
+    }
+
+    @Test
+    fun aBadTokenIsRefusedBeforeTheImageIsChecked() = runBlocking {
+        val result = settings.useTelegram("a b", "1")
+
+        assertTrue(result.isFailure)
+        assertTrue(scripts.isEmpty())
     }
 
     @Test

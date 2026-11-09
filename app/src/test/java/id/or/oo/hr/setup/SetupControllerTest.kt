@@ -74,6 +74,10 @@ class SetupControllerTest {
                         throw e
                     }
                 }
+                TELEGRAM_CHECK_SCRIPT -> {
+                    onLine(TELEGRAM_PRESENT)
+                    0
+                }
                 CODEX_MODELS_SCRIPT -> {
                     calls += "models"
                     modelsGate.await()
