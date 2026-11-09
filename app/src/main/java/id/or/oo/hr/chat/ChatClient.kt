@@ -127,10 +127,10 @@ class ChatClient(
 
     override suspend fun answer(runId: String, requestId: String?, choice: String): Boolean =
         withContext(Dispatchers.IO) {
-            val body = JSONObject().put("choice", choice)
-            if (requestId != null) body.put("request_id", requestId)
             try {
-                request("POST", "$base/runs/$runId/approval", body).code in 200..299
+                val path = "$base/runs/${pathSegment(runId)}"
+                val run = request("GET", path, null)
+                if (run.code in 200..299) postAnswer(path, JSONObject(run.body), requestId, choice) else false
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -138,6 +138,25 @@ class ChatClient(
                 false
             }
         }
+
+    private suspend fun postAnswer(path: String, run: JSONObject, requestId: String?, choice: String): Boolean {
+        val controls = run.optJSONArray("pending_controls")
+        val prompt = (0 until (controls?.length() ?: 0))
+            .mapNotNull { controls?.optJSONObject(it) }
+            .firstOrNull { it.opt("kind") == "approval" && (requestId == null || it.opt("prompt_id") == requestId) }
+            ?: return true
+        val choices = prompt.optJSONArray("choices")
+        if ((0 until (choices?.length() ?: 0)).none { choices?.opt(it) == choice }) return false
+        val promptId = prompt.opt("prompt_id") as? String ?: return false
+        val generation = prompt.opt("execution_generation") as? Number
+            ?: run.opt("execution_generation") as? Number
+            ?: return false
+        val body = JSONObject()
+            .put("request_id", promptId)
+            .put("execution_generation", generation)
+            .put("choice", choice)
+        return request("POST", "$path/approval", body).code in 200..299
+    }
 
     override suspend fun resolveLost(turnId: String): Boolean =
         withContext(Dispatchers.IO) {
