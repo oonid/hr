@@ -23,7 +23,12 @@ data class Turn(
     val answering: Boolean,
 )
 
-data class ChatView(val conversation: Conversation, val turn: Turn?, val error: String?)
+data class ChatView(
+    val conversation: Conversation,
+    val turn: Turn?,
+    val error: String?,
+    val busyElsewhere: Boolean = false,
+)
 
 class ChatController(
     private val store: ConversationStore,
@@ -49,6 +54,7 @@ class ChatController(
     val view: StateFlow<ChatView?> = mutableView
 
     init {
+        work.trySend { listNow() }
         scope.launch(io) {
             for (op in work) runCatching { op() }
         }
@@ -161,6 +167,7 @@ class ChatController(
                 val running = active
                 if (running == null || running.job !== me || running.turn.approval !== approval) return@launch
                 running.turn = running.turn.copy(approval = if (ok) null else approval, answering = false)
+                if (ok && error == ANSWER_FAILED) error = null
                 if (!ok && opened?.id == running.conversation.id) error = ANSWER_FAILED
                 publish()
             }
@@ -194,7 +201,7 @@ class ChatController(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            TurnOutcome.Broken(e.message ?: e.javaClass.simpleName)
+            TurnOutcome.Broken(REQUEST_FAILED)
         }
         finish(me, outcome)
     }
@@ -289,12 +296,14 @@ class ChatController(
     private fun publish() {
         val shown = opened
         val running = active?.takeIf { it.conversation.id == shown?.id }
-        mutableView.value = shown?.let { ChatView(running?.conversation ?: it, running?.turn, error) }
+        val elsewhere = active != null && running == null
+        mutableView.value = shown?.let { ChatView(running?.conversation ?: it, running?.turn, error, elsewhere) }
     }
 
     private companion object {
         const val NEW_TITLE = "New chat"
         const val NOT_RUNNING = "the gateway is not running"
         const val ANSWER_FAILED = "couldn't send the answer to Hermes"
+        const val REQUEST_FAILED = "the request failed"
     }
 }
