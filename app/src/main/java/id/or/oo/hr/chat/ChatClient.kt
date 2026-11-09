@@ -112,10 +112,16 @@ class ChatClient(
         }
         BufferedReader(InputStreamReader(connection.inputStream, Charsets.UTF_8)).use { reader ->
             readSse(generateSequence { reader.readLine() }.iterator()) { frame ->
-                chatEvent(frame)?.let { onEvent(if (it is ChatEvent.Tool) it.copy(label = redact(it.label, secrets())) else it) }
+                chatEvent(frame)?.let { onEvent(redacted(it, secrets())) }
             }
         }
         return null
+    }
+
+    private fun redacted(event: ChatEvent, secrets: List<String>): ChatEvent = when (event) {
+        is ChatEvent.Tool -> event.copy(label = redact(event.label, secrets))
+        is ChatEvent.Approval -> event.copy(command = redact(event.command, secrets), description = redact(event.description, secrets))
+        else -> event
     }
 
     private fun abandonIfCancelled(connection: HttpURLConnection, active: () -> Boolean) {

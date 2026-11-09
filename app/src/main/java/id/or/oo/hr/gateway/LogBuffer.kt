@@ -1,5 +1,6 @@
 package id.or.oo.hr.gateway
 
+import id.or.oo.hr.MIN_SECRET_LENGTH
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import java.nio.ByteBuffer
@@ -69,7 +70,7 @@ class LogBuffer(
     fun tail(count: Int): List<String> = snapshot().takeLast(count)
 
     private fun usable(found: List<String>): List<String> =
-        found.filter { it.length >= MIN_SECRET }.distinct().sortedByDescending { it.length }
+        found.filter { it.length >= MIN_SECRET_LENGTH }.distinct().sortedByDescending { it.length }
 
     private fun remember(found: List<String>) {
         known = found
@@ -166,7 +167,7 @@ class LogBuffer(
         var at = 0
         while (at < line.length) {
             val run = keys.maxOf { key -> key.indices.maxOf { start -> common(line, at, key, start) } }
-            if (run >= MIN_SECRET) {
+            if (run >= MIN_SECRET_LENGTH) {
                 out.append(REDACTED)
                 at += run
             } else {
@@ -193,7 +194,6 @@ class LogBuffer(
         const val MAX_LINE_CHARS = 2_000
         private const val MAX_SEQUENCE = 256
         private const val MAX_STRING = 4_096
-        private const val MIN_SECRET = 8
         private const val MIN_HIDDEN = 4
         private const val MIN_SCRUBBED = 16
         private const val REDACTED = "[redacted]"
