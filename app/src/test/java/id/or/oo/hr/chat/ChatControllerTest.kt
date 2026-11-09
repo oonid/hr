@@ -24,6 +24,7 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
 import java.io.IOException
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -60,6 +61,7 @@ class ChatControllerTest {
 
     @Volatile
     private var resolution = CompletableDeferred(true)
+    private val resolutions = ConcurrentHashMap<String, CompletableDeferred<Boolean>>()
 
     private val turns = object : ChatTurns {
         override suspend fun send(sessionId: String, turnId: String, text: String, onEvent: (ChatEvent) -> Unit): TurnOutcome {
@@ -83,7 +85,7 @@ class ChatControllerTest {
         override suspend fun resolveLost(turnId: String): Boolean {
             log += "resolve $turnId"
             lost.send(turnId)
-            return resolution.await()
+            return (resolutions[turnId] ?: resolution).await()
         }
     }
 
@@ -142,7 +144,7 @@ class ChatControllerTest {
         controller.send("one")
         val call = nextCall()
         call.outcome.complete(TurnOutcome.Broken("x"))
-        assertEquals(call.turnId, ended(chat.id, 1).conversation.pendingTurn)
+        assertEquals(listOf(call.turnId), ended(chat.id, 1).conversation.pendingTurns)
         return call.turnId
     }
 
@@ -760,13 +762,13 @@ class ChatControllerTest {
             val chat = open()
             controller.send("hi")
             val call = nextCall()
-            assertEquals(call.turnId, store.load(chat.id)!!.pendingTurn)
+            assertEquals(listOf(call.turnId), store.load(chat.id)!!.pendingTurns)
             call.onEvent(ChatEvent.Text("part"))
             awaitView { it?.turn?.text == "part" }
             call.outcome.complete(outcome)
             val done = ended(chat.id, 2)
-            assertEquals(call.turnId, done.conversation.pendingTurn)
-            assertEquals(call.turnId, persisted(done)!!.pendingTurn)
+            assertEquals(listOf(call.turnId), done.conversation.pendingTurns)
+            assertEquals(listOf(call.turnId), persisted(done)!!.pendingTurns)
         }
     }
 
@@ -775,10 +777,10 @@ class ChatControllerTest {
         val chat = open()
         controller.send("hi")
         val call = nextCall()
-        assertEquals(call.turnId, store.load(chat.id)!!.pendingTurn)
+        assertEquals(listOf(call.turnId), store.load(chat.id)!!.pendingTurns)
         call.outcome.complete(TurnOutcome.Finished("stop"))
         val done = ended(chat.id, 1)
-        assertNull(done.conversation.pendingTurn)
+        assertEquals(emptyList<String>(), done.conversation.pendingTurns)
         assertEquals(done.conversation, persisted(done))
         assertEquals(listOf(ChatMessage(true, "hi")), done.conversation.messages)
     }
@@ -788,13 +790,13 @@ class ChatControllerTest {
         val chat = open()
         controller.send("hi")
         val call = nextCall()
-        assertEquals(call.turnId, store.load(chat.id)!!.pendingTurn)
+        assertEquals(listOf(call.turnId), store.load(chat.id)!!.pendingTurns)
         call.onEvent(ChatEvent.Text("part"))
         awaitView { it?.turn?.text == "part" }
         controller.stop()
         val done = ended(chat.id, 2)
-        assertNull(done.conversation.pendingTurn)
-        assertNull(persisted(done)!!.pendingTurn)
+        assertEquals(emptyList<String>(), done.conversation.pendingTurns)
+        assertEquals(emptyList<String>(), persisted(done)!!.pendingTurns)
     }
 
     @Test
@@ -809,10 +811,10 @@ class ChatControllerTest {
         gate.complete(true)
         val call = nextCall()
         assertEquals(listOf("send $old", "resolve $old", "send ${call.turnId}"), log.toList())
-        assertEquals(call.turnId, store.load(chat.id)!!.pendingTurn)
+        assertEquals(listOf(old, call.turnId), store.load(chat.id)!!.pendingTurns)
         call.outcome.complete(TurnOutcome.Finished("stop"))
         val done = ended(chat.id, 2)
-        assertNull(done.conversation.pendingTurn)
+        assertEquals(emptyList<String>(), done.conversation.pendingTurns)
         assertEquals(done.conversation, persisted(done))
     }
 
@@ -825,7 +827,7 @@ class ChatControllerTest {
         assertEquals(old, nextLost())
         nextCall().outcome.complete(TurnOutcome.Finished("stop"))
         val done = ended(chat.id, 2)
-        assertEquals(old, done.conversation.pendingTurn)
+        assertEquals(listOf(old), done.conversation.pendingTurns)
         assertEquals(done.conversation, persisted(done))
     }
 
@@ -838,20 +840,20 @@ class ChatControllerTest {
         assertEquals(old, nextLost())
         controller.stop()
         val done = ended(chat.id, 2)
-        assertEquals(old, done.conversation.pendingTurn)
+        assertEquals(listOf(old), done.conversation.pendingTurns)
         assertEquals(done.conversation, persisted(done))
         assertTrue(calls.tryReceive().isFailure)
     }
 
     @Test
-    fun aGatewayThatStopsSoonAfterSaysSo() {
+    fun aLostConnectionStillWaits() {
         gatewayWaitMs = 30_000
         val chat = open()
         controller.send("hi")
         val call = nextCall()
         call.onEvent(ChatEvent.Text("part"))
         awaitView { it?.turn?.text == "part" }
-        call.outcome.complete(TurnOutcome.Broken("unexpected end of stream"))
+        call.outcome.complete(TurnOutcome.Broken("unexpected end of stream", lost = true))
         awaitGatewayWait()
         assertNotNull(controller.view.value!!.turn)
         gateway.value = GatewayState.StoppedUnexpectedly(137, emptyList())
@@ -873,8 +875,8 @@ class ChatControllerTest {
         controller.stop()
         val done = ended(chat.id, 2)
         assertNull(done.error)
-        assertEquals(call.turnId, done.conversation.pendingTurn)
-        assertEquals(call.turnId, persisted(done)!!.pendingTurn)
+        assertEquals(listOf(call.turnId), done.conversation.pendingTurns)
+        assertEquals(listOf(call.turnId), persisted(done)!!.pendingTurns)
     }
 
     @Test
@@ -885,7 +887,7 @@ class ChatControllerTest {
         controller.send("two")
         assertEquals(old, nextLost())
         nextCall().outcome.complete(TurnOutcome.Finished("stop"))
-        assertEquals(old, ended(chat.id, 2).conversation.pendingTurn)
+        assertEquals(listOf(old), ended(chat.id, 2).conversation.pendingTurns)
     }
 
     @Test
@@ -897,7 +899,92 @@ class ChatControllerTest {
         val call = nextCall()
         call.outcome.complete(TurnOutcome.Broken("y"))
         val done = ended(chat.id, 2)
-        assertEquals(call.turnId, done.conversation.pendingTurn)
+        assertEquals(listOf(call.turnId), done.conversation.pendingTurns)
         assertEquals(done.conversation, persisted(done))
+    }
+
+    private fun savedWithLost(id: String, vararg pending: String): Conversation {
+        val c = saved(id).copy(pendingTurns = pending.toList())
+        store.save(c)
+        controller.open(id)
+        awaitView { it?.conversation?.id == id }
+        return c
+    }
+
+    @Test
+    fun twoLostTurnsAreBothResolvedBeforeTheNextSend() {
+        val chat = savedWithLost("two", "lost-a", "lost-b")
+        val gate = CompletableDeferred<Boolean>()
+        resolution = gate
+        controller.send("next")
+        assertEquals("lost-a", nextLost())
+        assertEquals(listOf("lost-a", "lost-b", "id-1"), store.load(chat.id)!!.pendingTurns)
+        assertTrue(lost.tryReceive().isFailure)
+        gate.complete(true)
+        assertEquals("lost-b", nextLost())
+        val call = nextCall()
+        assertEquals(listOf("resolve lost-a", "resolve lost-b", "send ${call.turnId}"), log.toList())
+        call.outcome.complete(TurnOutcome.Finished("stop"))
+        val done = ended(chat.id, 3)
+        assertEquals(emptyList<String>(), done.conversation.pendingTurns)
+        assertEquals(done.conversation, persisted(done))
+    }
+
+    @Test
+    fun aResolvedTurnIsDroppedAndAnUnresolvedOneKept() {
+        val chat = savedWithLost("mixed", "lost-a", "lost-b", "lost-c")
+        resolutions["lost-a"] = CompletableDeferred(true)
+        resolutions["lost-b"] = CompletableDeferred(false)
+        controller.send("next")
+        val call = nextCall()
+        assertEquals(listOf("resolve lost-a", "resolve lost-b", "send ${call.turnId}"), log.toList())
+        call.outcome.complete(TurnOutcome.Broken("x"))
+        val done = ended(chat.id, 3)
+        assertEquals(listOf("lost-b", "lost-c", call.turnId), done.conversation.pendingTurns)
+        assertEquals(done.conversation, persisted(done))
+    }
+
+    @Test
+    fun aStopWhileResolvingKeepsEveryUnresolvedTurn() {
+        val chat = savedWithLost("stopped", "lost-a", "lost-b", "lost-c")
+        resolutions["lost-a"] = CompletableDeferred(true)
+        resolutions["lost-b"] = CompletableDeferred()
+        controller.send("next")
+        assertEquals("lost-a", nextLost())
+        assertEquals("lost-b", nextLost())
+        controller.stop()
+        val done = ended(chat.id, 3)
+        assertEquals(listOf("lost-b", "lost-c"), done.conversation.pendingTurns)
+        assertEquals(done.conversation, persisted(done))
+        assertTrue(calls.tryReceive().isFailure)
+    }
+
+    @Test
+    fun atMostTenLostTurnsAreKept() {
+        val old = (1..10).map { "lost-$it" }.toTypedArray()
+        val chat = savedWithLost("full", *old)
+        resolution = CompletableDeferred(false)
+        controller.send("next")
+        val call = nextCall()
+        assertEquals(old.drop(1) + call.turnId, store.load(chat.id)!!.pendingTurns)
+        call.outcome.complete(TurnOutcome.Rejected(500, "boom"))
+        val done = ended(chat.id, 3)
+        assertEquals(old.drop(1) + call.turnId, done.conversation.pendingTurns)
+        assertEquals(done.conversation, persisted(done))
+    }
+
+    @Test
+    fun aReadTimeoutDoesNotWaitForTheGateway() {
+        gatewayWaitMs = 30_000
+        val chat = open()
+        controller.send("hi")
+        val call = nextCall()
+        call.onEvent(ChatEvent.Text("part"))
+        awaitView { it?.turn?.text == "part" }
+        call.outcome.complete(TurnOutcome.Broken("Read timed out"))
+        val done = ended(chat.id, 2)
+        assertEquals("Read timed out", done.error)
+        assertEquals(listOf(call.turnId), done.conversation.pendingTurns)
+        assertEquals(0, gateway.subscriptionCount.value)
     }
 }

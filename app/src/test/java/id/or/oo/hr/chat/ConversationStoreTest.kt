@@ -103,17 +103,31 @@ class ConversationStoreTest {
     }
 
     @Test
-    fun pendingTurnRoundTrips() {
-        val pending = conversation("p").copy(pendingTurn = "0f6c3a52-7d1e-4b8a-9c3f-2e5d6a7b8c9d")
+    fun pendingTurnsRoundTripAndReadTheLegacyField() {
+        val pending = conversation("p").copy(pendingTurns = listOf("0f6c3a52-7d1e-4b8a-9c3f-2e5d6a7b8c9d", "b2"))
         store.save(pending)
 
         assertEquals(pending, store.load("p"))
-        assertEquals("0f6c3a52-7d1e-4b8a-9c3f-2e5d6a7b8c9d", store.list().single().pendingTurn)
+        assertEquals(listOf("0f6c3a52-7d1e-4b8a-9c3f-2e5d6a7b8c9d", "b2"), store.list().single().pendingTurns)
+        assertFalse(File(dir, "p.json").readText().contains("\"pendingTurn\""))
 
-        store.save(pending.copy(pendingTurn = null))
+        store.save(pending.copy(pendingTurns = emptyList()))
 
-        assertNull(store.load("p")!!.pendingTurn)
+        assertEquals(emptyList<String>(), store.load("p")!!.pendingTurns)
         assertFalse(File(dir, "p.json").readText().contains("pendingTurn"))
+
+        val head = """{"id":"ID","sessionId":"s","title":"t","updatedAt":1,"messages":[]"""
+        File(dir, "l.json").writeText(head.replace("ID", "l") + ""","pendingTurn":"old"}""")
+        File(dir, "w.json").writeText(head.replace("ID", "w") + ""","pendingTurn":"old","pendingTurns":["a","b"]}""")
+
+        assertEquals(listOf("old"), store.load("l")!!.pendingTurns)
+        assertEquals(listOf("a", "b"), store.load("w")!!.pendingTurns)
+
+        store.save(store.load("l")!!)
+
+        val rewritten = File(dir, "l.json").readText()
+        assertFalse(rewritten.contains("\"pendingTurn\""))
+        assertEquals(listOf("old"), store.load("l")!!.pendingTurns)
     }
 
     @Test
@@ -123,11 +137,17 @@ class ConversationStoreTest {
         File(dir, "n.json").writeText(head.replace("ID", "n") + ""","pendingTurn":5}""")
         File(dir, "o.json").writeText(head.replace("ID", "o") + ""","pendingTurn":{"id":"x"}}""")
         File(dir, "z.json").writeText(head.replace("ID", "z") + ""","pendingTurn":null}""")
+        File(dir, "a.json").writeText(head.replace("ID", "a") + ""","pendingTurns":["x",1]}""")
+        File(dir, "s.json").writeText(head.replace("ID", "s") + ""","pendingTurns":"x"}""")
+        File(dir, "e.json").writeText(head.replace("ID", "e") + ""","pendingTurns":null}""")
 
         assertNull(store.load("n"))
         assertNull(store.load("o"))
-        assertNull(store.load("z")!!.pendingTurn)
-        assertEquals(listOf("z"), store.list().map { it.id })
+        assertNull(store.load("a"))
+        assertNull(store.load("s"))
+        assertEquals(emptyList<String>(), store.load("z")!!.pendingTurns)
+        assertEquals(emptyList<String>(), store.load("e")!!.pendingTurns)
+        assertEquals(listOf("e", "z"), store.list().map { it.id }.sorted())
     }
 
     @Test

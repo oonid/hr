@@ -17,6 +17,7 @@ import org.junit.Test
 import java.io.EOFException
 import java.io.IOException
 import java.net.ServerSocket
+import java.net.SocketTimeoutException
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -126,7 +127,7 @@ class ChatClientTest {
             x.eventStreamHead()
             x.write(chunk("partial"))
         }
-        assertEquals(TurnOutcome.Broken("the reply ended early"), send())
+        assertEquals(TurnOutcome.Broken("the reply ended early", lost = true), send())
         assertEquals(listOf<ChatEvent>(ChatEvent.Text("partial")), events.toList())
     }
 
@@ -140,6 +141,19 @@ class ChatClientTest {
         val outcome = send(client(readTimeoutMs = 200))
         release.countDown()
         assertTrue(outcome is TurnOutcome.Broken)
+        assertFalse((outcome as TurnOutcome.Broken).lost)
+    }
+
+    @Test
+    fun toolLabelsAreRedacted() {
+        server.stream = { x ->
+            x.eventStreamHead()
+            val running = JSONObject().put("toolCallId", "c1").put("status", "running").put("label", "curl -H 'Bearer sk-secret' and tg-token")
+            x.write("event: hermes.tool.progress\ndata: $running\n\n")
+            x.write(finish())
+        }
+        send(client(secrets = listOf("sk-secret", "tg-token")))
+        assertEquals(ChatEvent.Tool("c1", "curl -H 'Bearer [redacted]' and [redacted]", true), events.first())
     }
 
     @Test
@@ -495,8 +509,32 @@ class ChatClientTest {
                 x.write(finish())
             }
             val outcome = runBlocking { client().send("s", "t1", "hi") { if (it is ChatEvent.Text) throw thrown } }
-            assertEquals(TurnOutcome.Broken("the connection to the gateway was lost"), outcome)
+            assertEquals(TurnOutcome.Broken("the connection to the gateway was lost", lost = true), outcome)
         }
+    }
+
+    @Test
+    fun aDroppedConnectionIsLostAndRedacted() {
+        server.stream = { x ->
+            x.eventStreamHead()
+            x.write(chunk("part"))
+            x.write(finish())
+        }
+        val thrown = IOException("reset while sending sk-secret")
+        val outcome = runBlocking { client().send("s", "t1", "hi") { if (it is ChatEvent.Text) throw thrown } }
+        assertEquals(TurnOutcome.Broken("reset while sending [redacted]", lost = true), outcome)
+    }
+
+    @Test
+    fun aReadTimeoutIsNotALostConnection() {
+        server.stream = { x ->
+            x.eventStreamHead()
+            x.write(chunk("part"))
+            x.write(finish())
+        }
+        val thrown = SocketTimeoutException("Read timed out")
+        val outcome = runBlocking { client().send("s", "t1", "hi") { if (it is ChatEvent.Text) throw thrown } }
+        assertEquals(TurnOutcome.Broken("Read timed out", lost = false), outcome)
     }
 
     @Test
