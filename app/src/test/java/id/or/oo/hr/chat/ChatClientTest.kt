@@ -107,6 +107,17 @@ class ChatClientTest {
     }
 
     @Test
+    fun doneWithoutAFinishFrameIsFinished() {
+        server.stream = { x ->
+            x.eventStreamHead()
+            x.write(chunk("ok"))
+            x.write("data: [DONE]\n\n")
+        }
+        assertEquals(TurnOutcome.Finished("stop"), send())
+        assertEquals(listOf(ChatEvent.Text("ok"), ChatEvent.Done), events.toList())
+    }
+
+    @Test
     fun aStreamCutShortIsBroken() {
         server.stream = { x ->
             x.eventStreamHead()
@@ -222,7 +233,7 @@ class ChatClientTest {
         }
         assertTrue(TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - started) < 10)
         assertTrue(writeFailed.await(10, TimeUnit.SECONDS))
-        assertTrue(events.size <= 1)
+        assertTrue(events.isEmpty())
     }
 
     @Test
