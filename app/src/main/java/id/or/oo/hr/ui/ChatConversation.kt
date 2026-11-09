@@ -43,6 +43,7 @@ import id.or.oo.hr.chat.ChatMessage
 import id.or.oo.hr.chat.ChatView
 import id.or.oo.hr.chat.ToolLine
 import id.or.oo.hr.chat.Turn
+import id.or.oo.hr.chat.offeredChoices
 import id.or.oo.hr.gateway.GatewayState
 import id.or.oo.hr.image.canStartSession
 
@@ -148,9 +149,9 @@ private fun Running(turn: Turn, app: HrApp) {
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ApprovalChoices(choices: List<String>, enabled: Boolean, onChoice: (String) -> Unit) {
-    val offered = APPROVAL_CHOICES.filter { it.first in choices }
+    val offered = offeredChoices(choices)
     if (offered.isEmpty()) {
-        Text("Answer this in the terminal.")
+        Text("Hermes offered no choice hr supports. Tap Stop to cancel.")
         return
     }
     FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -163,8 +164,6 @@ private fun ApprovalChoices(choices: List<String>, enabled: Boolean, onChoice: (
         }
     }
 }
-
-private val APPROVAL_CHOICES = listOf("once" to "Allow once", "session" to "Allow for this chat", "deny" to "Deny")
 
 private const val BUBBLE_WIDTH = 0.85f
 
