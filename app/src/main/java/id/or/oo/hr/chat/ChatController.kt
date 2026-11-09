@@ -49,9 +49,11 @@ class ChatController(
     private val work = Channel<() -> Unit>(Channel.UNLIMITED)
     private val mutableConversations = MutableStateFlow<List<Conversation>>(emptyList())
     private val mutableView = MutableStateFlow<ChatView?>(null)
+    private val mutableRunningId = MutableStateFlow<String?>(null)
 
     val conversations: StateFlow<List<Conversation>> = mutableConversations
     val view: StateFlow<ChatView?> = mutableView
+    val runningId: StateFlow<String?> = mutableRunningId
 
     init {
         work.trySend { listNow() }
@@ -213,8 +215,8 @@ class ChatController(
             if (running.job !== me) return
             val turn = running.turn
             running.turn = when (event) {
-                is ChatEvent.Text -> turn.copy(text = turn.text + event.delta)
-                is ChatEvent.Tool -> turn.copy(tools = toolLines(turn.tools, event))
+                is ChatEvent.Text -> turn.copy(text = turn.text + event.delta, approval = null, answering = false)
+                is ChatEvent.Tool -> turn.copy(tools = toolLines(turn.tools, event), approval = null, answering = false)
                 is ChatEvent.Approval -> turn.copy(approval = event, answering = false)
                 else -> return
             }
@@ -237,7 +239,7 @@ class ChatController(
             val running = active ?: return
             if (running.job !== me) return
             active = null
-            val (interrupted, reason) = if (running.stopped || outcome == null) true to null else ending(outcome)
+            val (interrupted, reason) = if (running.stopped || outcome == null) true to null else ending(outcome, gateway.value is GatewayState.Running)
             val text = running.turn.text.trim()
             val tools = running.turn.tools.map { it.label }
             val conversation = if (text.isEmpty() && tools.isEmpty()) {
@@ -256,15 +258,15 @@ class ChatController(
         }
     }
 
-    private fun ending(outcome: TurnOutcome): Pair<Boolean, String?> = when (outcome) {
+    private fun ending(outcome: TurnOutcome, gatewayUp: Boolean): Pair<Boolean, String?> = when (outcome) {
         is TurnOutcome.Finished -> false to if (outcome.reason == "stop") null else "the reply stopped early (${outcome.reason})"
-        TurnOutcome.NoGateway -> true to NOT_RUNNING
+        TurnOutcome.NoGateway -> true to if (gatewayUp) NOT_RUNNING else GATEWAY_STOPPED
         is TurnOutcome.Rejected -> true to if (outcome.code == 401) {
             "the gateway refused hr's key (HTTP 401)"
         } else {
             "the gateway refused the request (HTTP ${outcome.code}): ${outcome.body}"
         }
-        is TurnOutcome.Broken -> true to outcome.reason
+        is TurnOutcome.Broken -> true to if (gatewayUp) outcome.reason else GATEWAY_STOPPED
     }
 
     private fun save(conversation: Conversation): CompletableDeferred<String?> {
@@ -276,8 +278,8 @@ class ChatController(
             } catch (e: Exception) {
                 "couldn't save the chat (${e.message ?: e.javaClass.simpleName})"
             }
-            listNow()
             done.complete(failure)
+            listNow()
             if (failure != null) {
                 synchronized(lock) {
                     if (opened?.id == conversation.id) {
@@ -298,12 +300,14 @@ class ChatController(
         val shown = opened
         val running = active?.takeIf { it.conversation.id == shown?.id }
         val elsewhere = active != null && running == null
+        mutableRunningId.value = active?.conversation?.id
         mutableView.value = shown?.let { ChatView(running?.conversation ?: it, running?.turn, error, elsewhere) }
     }
 
     private companion object {
         const val NEW_TITLE = "New chat"
         const val NOT_RUNNING = "the gateway is not running"
+        const val GATEWAY_STOPPED = "the gateway stopped during the reply"
         const val ANSWER_FAILED = "couldn't send the answer to Hermes"
         const val REQUEST_FAILED = "the request failed"
     }
