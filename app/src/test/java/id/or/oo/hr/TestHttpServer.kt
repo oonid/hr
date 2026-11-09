@@ -17,7 +17,14 @@ class TestHttpServer(private val respond: (path: String, headers: Map<String, St
         val headers: Map<String, String>,
         val body: String,
         private val out: OutputStream,
+        private val socket: Socket,
     ) {
+        fun abort() {
+            socket.setSoLinger(true, 0)
+            socket.close()
+        }
+
+
         fun write(text: String): Boolean = write(text.toByteArray())
 
         fun write(bytes: ByteArray): Boolean = try {
@@ -87,7 +94,7 @@ class TestHttpServer(private val respond: (path: String, headers: Map<String, St
         requests += path
         val handler = stream
         if (handler != null) {
-            handler(Exchange(path, headers, body, client.getOutputStream()))
+            handler(Exchange(path, headers, body, client.getOutputStream(), client))
             return
         }
         client.getOutputStream().apply {

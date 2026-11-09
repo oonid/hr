@@ -2,10 +2,12 @@ package id.or.oo.hr.chat
 
 import id.or.oo.hr.redact
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -44,7 +46,8 @@ class ChatClient(
         withContext(Dispatchers.IO) {
             val connection = URL("$base/chat/completions").openConnection() as HttpURLConnection
             coroutineScope {
-                val watcher = launch {
+                var finish: String? = null
+                val watcher = launch(start = CoroutineStart.UNDISPATCHED) {
                     try {
                         awaitCancellation()
                     } finally {
@@ -52,7 +55,10 @@ class ChatClient(
                     }
                 }
                 try {
-                    exchange(connection, sessionId, text, onEvent)
+                    exchange(connection, sessionId, text, { isActive }) {
+                        if (it is ChatEvent.Finished) finish = it.reason
+                        onEvent(it)
+                    }.let { outcome -> outcome ?: finish?.let { TurnOutcome.Finished(it) } ?: TurnOutcome.Broken(EARLY) }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: ConnectException) {
@@ -60,7 +66,7 @@ class ChatClient(
                     TurnOutcome.NoGateway
                 } catch (e: IOException) {
                     ensureActive()
-                    TurnOutcome.Broken(redact(e.message ?: e.javaClass.simpleName, secrets()))
+                    finish?.let { TurnOutcome.Finished(it) } ?: TurnOutcome.Broken(redact(e.message ?: e.javaClass.simpleName, secrets()))
                 } finally {
                     watcher.cancel()
                 }
@@ -71,8 +77,10 @@ class ChatClient(
         connection: HttpURLConnection,
         sessionId: String,
         text: String,
+        active: () -> Boolean,
         onEvent: (ChatEvent) -> Unit,
-    ): TurnOutcome {
+    ): TurnOutcome? {
+        abandonIfCancelled(connection, active)
         connection.requestMethod = "POST"
         connection.instanceFollowRedirects = false
         connection.useCaches = false
@@ -85,20 +93,23 @@ class ChatClient(
         connection.doOutput = true
         connection.outputStream.use { it.write(turnBody(text).toByteArray(Charsets.UTF_8)) }
         val code = connection.responseCode
+        abandonIfCancelled(connection, active)
         if (code >= 400) {
             val body = connection.errorStream?.use { it.readBytes().toString(Charsets.UTF_8) } ?: ""
             return TurnOutcome.Rejected(code, redact(body, secrets()).take(BODY_LIMIT))
         }
-        var finish: String? = null
         BufferedReader(InputStreamReader(connection.inputStream, Charsets.UTF_8)).use { reader ->
             readSse(generateSequence { reader.readLine() }.iterator()) { frame ->
-                val event = chatEvent(frame) ?: return@readSse
-                if (event is ChatEvent.Finished) finish = event.reason
-                onEvent(event)
+                chatEvent(frame)?.let(onEvent)
             }
         }
-        val reason = finish ?: return TurnOutcome.Broken("the reply ended early")
-        return TurnOutcome.Finished(reason)
+        return null
+    }
+
+    private fun abandonIfCancelled(connection: HttpURLConnection, active: () -> Boolean) {
+        if (active()) return
+        connection.disconnect()
+        throw CancellationException("the turn was cancelled")
     }
 
     override suspend fun answer(runId: String, requestId: String?, choice: String): Boolean =
@@ -131,6 +142,7 @@ class ChatClient(
         .toString()
 
     private companion object {
+        const val EARLY = "the reply ended early"
         const val BODY_LIMIT = 500
         const val SHORT_TIMEOUT_MS = 15_000
     }
