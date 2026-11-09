@@ -1,6 +1,7 @@
 package id.or.oo.hr.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -14,6 +15,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import id.or.oo.hr.HrApp
 
@@ -40,7 +42,11 @@ fun HrScreens(app: HrApp, actions: HrActions) {
         topBar = {
             TopAppBar(
                 title = {
-                    Text(if (screen == Screen.Chat) chatView?.conversation?.title ?: screen.title else screen.title)
+                    Text(
+                        if (screen == Screen.Chat) chatView?.conversation?.title ?: screen.title else screen.title,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 },
                 navigationIcon = {
                     if (screen != Screen.Home) TextButton(onClick = { back() }) { Text("Back") }
@@ -48,7 +54,7 @@ fun HrScreens(app: HrApp, actions: HrActions) {
             )
         },
     ) { padding ->
-        val modifier = Modifier.padding(padding)
+        val modifier = Modifier.padding(padding).consumeWindowInsets(padding)
         when (screen) {
             Screen.Home -> HomeScreen(app, actions, modifier) { screen = it }
             Screen.Logs -> LogsScreen(app, modifier)
