@@ -21,7 +21,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
 
-const val BASE = "http://127.0.0.1:8642/p/android/v1"
+const val BASE = "http://127.0.0.1:8642/p/${Hermes.PROFILE_NAME}/v1"
 
 sealed interface TurnOutcome {
     data class Finished(val reason: String) : TurnOutcome
@@ -131,7 +131,10 @@ class ChatClient(
             if (requestId != null) body.put("request_id", requestId)
             try {
                 request("POST", "$base/runs/$runId/approval", body).code in 200..299
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
+                ensureActive()
                 false
             }
         }
@@ -149,11 +152,12 @@ class ChatClient(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                ensureActive()
                 false
             }
         }
 
-    private fun resolveIfUnknown(path: String, run: JSONObject): Boolean {
+    private suspend fun resolveIfUnknown(path: String, run: JSONObject): Boolean {
         if (run.opt("status") != "unknown") return true
         val admission = run.opt("admission_id") as? String ?: return false
         val generation = run.opt("execution_generation") as? Number ?: return false
@@ -177,9 +181,17 @@ class ChatClient(
 
     private class Reply(val code: Int, val body: String)
 
-    private fun request(method: String, url: String, body: JSONObject?): Reply {
+    private suspend fun request(method: String, url: String, body: JSONObject?): Reply = coroutineScope {
         val connection = URL(url).openConnection() as HttpURLConnection
+        val watcher = launch(start = CoroutineStart.UNDISPATCHED) {
+            try {
+                awaitCancellation()
+            } finally {
+                connection.disconnect()
+            }
+        }
         try {
+            abandonIfCancelled(connection) { isActive }
             connection.requestMethod = method
             connection.instanceFollowRedirects = false
             connection.useCaches = false
@@ -193,8 +205,10 @@ class ChatClient(
             }
             val code = connection.responseCode
             val text = if (code in 200..299) connection.inputStream.use { it.readBytes().toString(Charsets.UTF_8) } else ""
-            return Reply(code, text)
+            abandonIfCancelled(connection) { isActive }
+            Reply(code, text)
         } finally {
+            watcher.cancel()
             connection.disconnect()
         }
     }

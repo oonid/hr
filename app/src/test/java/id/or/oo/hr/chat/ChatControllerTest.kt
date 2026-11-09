@@ -887,4 +887,17 @@ class ChatControllerTest {
         nextCall().outcome.complete(TurnOutcome.Finished("stop"))
         assertEquals(old, ended(chat.id, 2).conversation.pendingTurn)
     }
+
+    @Test
+    fun aResolvedLostTurnGivesWayToANewBrokenOne() {
+        val chat = open()
+        val old = lostTurn(chat)
+        controller.send("two")
+        assertEquals(old, nextLost())
+        val call = nextCall()
+        call.outcome.complete(TurnOutcome.Broken("y"))
+        val done = ended(chat.id, 2)
+        assertEquals(call.turnId, done.conversation.pendingTurn)
+        assertEquals(done.conversation, persisted(done))
+    }
 }

@@ -7,6 +7,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -16,7 +17,6 @@ import org.junit.Test
 import java.io.EOFException
 import java.io.IOException
 import java.net.ServerSocket
-import java.security.MessageDigest
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -330,12 +330,8 @@ class ChatClientTest {
         assertTrue(events.first() is ChatEvent.Approval)
     }
 
-    private fun runPath(turnId: String): String {
-        val hash = MessageDigest.getInstance("SHA-256")
-            .digest("android\u0000sk-secret".toByteArray(Charsets.UTF_8))
-            .joinToString("") { "%02x".format(it) }
-        return "/p/android/v1/runs/chat:$hash:$turnId"
-    }
+    private fun runPath(turnId: String) =
+        "/p/android/v1/runs/chat:2c52a9be01bb1414de9f9b32d99cabe6c317289ca667fa6120c7227baa0afb8c:$turnId"
 
     private fun run(status: String) = JSONObject()
         .put("object", "hermes.run")
@@ -423,5 +419,51 @@ class ChatClientTest {
             val outcome = runBlocking { client().send("s", "t1", "hi") { if (it is ChatEvent.Text) throw thrown } }
             assertEquals(TurnOutcome.Broken("the connection to the gateway was lost"), outcome)
         }
+    }
+
+    @Test
+    fun cancellingAResolveDisconnectsAtOnce() {
+        val asked = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        server.stream = { x ->
+            asked.countDown()
+            release.await(30, TimeUnit.SECONDS)
+        }
+        try {
+            runBlocking {
+                val job = launch(Dispatchers.Default) { client().resolveLost("t1") }
+                assertTrue(asked.await(5, TimeUnit.SECONDS))
+                job.cancel()
+                withTimeout(5_000) { job.join() }
+                assertTrue(job.isCancelled)
+            }
+        } finally {
+            release.countDown()
+        }
+        assertEquals(listOf(runPath("t1")), server.requests.toList())
+    }
+
+    @Test
+    fun aResolveCancelledDuringTheLookupSendsNoResolve() {
+        val asked = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        server.stream = { x ->
+            if (x.path.endsWith("/resolve-unknown")) {
+                x.write(response(200, "{}"))
+            } else {
+                asked.countDown()
+                release.await(30, TimeUnit.SECONDS)
+                x.write(response(200, run("unknown")))
+            }
+        }
+        runBlocking {
+            val job = async(Dispatchers.Default) { client().resolveLost("t1") }
+            assertTrue(asked.await(5, TimeUnit.SECONDS))
+            job.cancel()
+            release.countDown()
+            job.join()
+            assertTrue(job.isCancelled)
+        }
+        assertEquals(listOf(runPath("t1")), server.requests.toList())
     }
 }
