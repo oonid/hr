@@ -172,3 +172,42 @@ The screen:
 - [ ] **Step 6:** Ask for a command that needs approval (for example "Delete the file /root/x with rm -rf"). Expected: the approval card; Deny → Hermes reports it was not allowed; again with Allow once → it runs (Review Focus 4). If no approval is requested, note the command used and mark the step skipped.
 - [ ] **Step 7:** Send "Say 'héllo 👋 你好'". Expected: shown and, after reopening the conversation, saved intact (Review Focus 5).
 - [ ] **Step 8:** `adb shell run-as id.or.oo.hr ls -l files/hr/chats/` → every file `-rw-------`; the API key 0 times in logcat (counted on the phone); `adb logcat -d -b crash` → nothing for `id.or.oo.hr`.
+
+---
+
+### Task 7: Follow-ups from the phone check
+
+Found on the phone (2026-11-09) after Tasks 1–5 and the final review:
+
+- When the gateway dies during a turn (killed, crashed, or Android stops it), Hermes 0.23.0 leaves that turn's admission in state `unknown` and pauses the session (`gateway.session_authority: Session … paused: unknown_execution`); every later turn on it ends with `finish_reason: "error"`. The session resumes after `POST /p/android/v1/runs/{run_id}/resolve-unknown` with `{"admission_id": …, "execution_generation": …}`, both read from `GET /p/android/v1/runs/{run_id}` (status `unknown`). For a Chat Completions turn sent with header `Idempotency-Key: <k>`, the run id is `chat:<sha256 hex of "android\u0000<API_SERVER_KEY>">:<k>` (measured: the `android` profile name matches; its full path and `default` give 404). A user's Stop does not pause the session.
+- The list does not follow new content once it is not at the very bottom: after returning to hr, a new message, the streamed reply and the approval card stay below the visible area.
+- When the gateway is killed mid-turn the error reads `EOFException`: the stream breaks before `GatewayController` reports the exit, and an `IOException` without a message shows its class name.
+- User and Hermes messages share one bubble colour; long ones are hard to tell apart.
+
+**Files:**
+- Modify: `app/src/main/java/id/or/oo/hr/chat/ChatClient.kt`, `chat/ConversationStore.kt`, `chat/ChatController.kt`, `ui/ChatConversation.kt` (and `ui/ChatScreen.kt` if needed)
+- Test: `ChatClientTest.kt`, `ConversationStoreTest.kt`, `ChatControllerTest.kt`
+
+**Interfaces:**
+- `ChatTurns.send(sessionId: String, turnId: String, text: String, onEvent: (ChatEvent) -> Unit): TurnOutcome` — `ChatClient` sends `Idempotency-Key: <turnId>`.
+- `ChatTurns.resolveLost(turnId: String): Boolean` — `ChatClient`: run id as above (`Hermes` profile name `android`, key from `key()` at call time); `GET $base/runs/<run id>`; 404 or a status other than `unknown` → true; `unknown` → `POST …/resolve-unknown` with the two fields (org.json) → true on 2xx; HTTP errors → false; `ConnectException`/`IOException` → false; never throws except `CancellationException`; the key never appears in any outcome or log.
+- `Conversation.pendingTurn: String? = null` (JSON `"pendingTurn"`, omitted when null; a non-string value makes the file malformed like other fields).
+- `ChatController`:
+  - each `send` makes `turnId = newId()`; the user message is saved with `pendingTurn = turnId`;
+  - the turn's end clears `pendingTurn` on `Finished(…)` and on a user Stop, and keeps it on `Broken`, `NoGateway` and `Rejected`;
+  - before sending, inside the turn job, when the conversation's previous `pendingTurn` is set, it calls `resolveLost(previous)` first. It sends either way, and the new user message's save already replaces `pendingTurn` with the new turn id.
+- `ChatController` errors:
+  - when a turn ends `Broken` or `NoGateway`, it waits up to 3 s for `gateway` to leave `Running`; if it does, the error is `"the gateway stopped during the reply"`;
+  - `ChatClient` maps an `IOException` with a blank message to `Broken("the connection to the gateway was lost")`.
+- Chat view scrolling: a `follow` state, true when a conversation opens and after each Send. The user's own drag sets it to `!list.canScrollForward` (only while `isScrollInProgress` from a user gesture). While `follow` is true, any change in message count, streamed text length, tool line count or approval presence scrolls to `(lastIndex, Int.MAX_VALUE)`.
+- Bubbles: the user's messages right-aligned in `primaryContainer`/`onPrimaryContainer`; Hermes's left-aligned in `surfaceVariant`/`onSurfaceVariant`; both at most 85% of the width.
+
+- [ ] **Step 1: Write the failing tests:**
+  - `ChatClientTest`: `theTurnIdIsSentAsIdempotencyKey`; `aLostTurnIsResolved` (GET at the exact run id, then the POST body); `aTurnThatIsNotUnknownIsLeftAlone`; `aMissingRunCountsAsResolved` (404); `noGatewayMeansNotResolved`; `aBlankIOExceptionSaysTheConnectionWasLost`.
+  - `ConversationStoreTest`: `pendingTurnRoundTrips`, `aNonStringPendingTurnIsMalformed`.
+  - `ChatControllerTest`: `aBrokenTurnLeavesItsTurnPending`; `aFinishedTurnClearsIt`; `stopClearsIt`; `theNextSendResolvesTheLostTurnFirst` (order: resolveLost(old) → send(new)); `aGatewayThatStopsSoonAfterSaysSo` (gateway turns StoppedUnexpectedly 1 s after the Broken outcome → the gateway-stopped text).
+- [ ] **Step 2: Run.** Expected: FAIL.
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run** the full suite and the coverage report. Expected: PASS; `id.or.oo.hr.chat` files ≥ 80%.
+- [ ] **Step 5: Commit** `fix: recover a chat after the gateway dies mid-reply` (and `fix: keep the chat scrolled to new content` for the UI part).
+- [ ] **Step 6: Phone:** kill the gateway mid-turn, Start, send again → answered (no `finish_reason: error`); the error line reads "the gateway stopped during the reply"; after leaving and reopening a chat, a new message and its reply stay in view; scrolling up during a long reply stays put.
