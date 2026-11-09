@@ -45,19 +45,22 @@ fun ChatScreen(app: HrApp, actions: HrActions, modifier: Modifier) {
 @Composable
 private fun ChatList(app: HrApp, modifier: Modifier) {
     val conversations by app.chat.conversations.collectAsStateWithLifecycle()
+    val runningId by app.chat.runningId.collectAsStateWithLifecycle()
     var deleting by rememberSaveable { mutableStateOf<String?>(null) }
     Column(modifier = modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Button(onClick = { app.chat.newChat() }) { Text("New chat") }
+        if (conversations.isEmpty()) Text("No chats yet. Tap New chat to start.")
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             items(conversations, key = Conversation::id) { conversation ->
                 Card(
                     modifier = Modifier.fillMaxWidth().combinedClickable(
                         onClick = { app.chat.open(conversation.id) },
-                        onLongClick = { deleting = conversation.id },
+                        onLongClick = { if (conversation.id != runningId) deleting = conversation.id },
                     ),
                 ) {
                     Column(modifier = Modifier.padding(12.dp)) {
                         Text(conversation.title, style = MaterialTheme.typography.titleSmall)
+                        if (conversation.id == runningId) Text("answering…", style = MaterialTheme.typography.bodySmall)
                         Text(
                             DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT)
                                 .format(Date(conversation.updatedAt)),

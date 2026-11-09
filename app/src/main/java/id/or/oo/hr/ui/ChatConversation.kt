@@ -34,17 +34,22 @@ import id.or.oo.hr.chat.ChatView
 import id.or.oo.hr.chat.ToolLine
 import id.or.oo.hr.chat.Turn
 import id.or.oo.hr.gateway.GatewayState
+import id.or.oo.hr.image.canStartSession
 
 @Composable
 fun ChatConversation(app: HrApp, actions: HrActions, view: ChatView, modifier: Modifier) {
     val gateway by app.gateway.state.collectAsStateWithLifecycle()
+    val operation by app.images.operation.collectAsStateWithLifecycle()
     val messages = view.conversation.messages
     val turn = view.turn
     val list = rememberLazyListState()
     val count = messages.size + if (turn != null) 1 else 0
     val streamed = (turn?.text?.length ?: 0) + (turn?.tools?.size ?: 0)
     LaunchedEffect(count, streamed) {
-        if (count > 0) list.scrollToItem(count - 1, Int.MAX_VALUE)
+        val info = list.layoutInfo
+        val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: -1
+        val atBottom = info.totalItemsCount == 0 || lastVisible >= info.totalItemsCount - 2
+        if (count > 0 && atBottom) list.scrollToItem(count - 1, Int.MAX_VALUE)
     }
     Column(modifier = modifier.fillMaxSize().imePadding().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         LazyColumn(
@@ -56,7 +61,9 @@ fun ChatConversation(app: HrApp, actions: HrActions, view: ChatView, modifier: M
             if (turn != null) item { Running(turn, app) }
         }
         view.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-        if (gateway !is GatewayState.Running) GatewayBanner(gateway, actions)
+        if (gateway !is GatewayState.Running) {
+            GatewayBanner(gateway, actions, canStartSession(operation))
+        }
         Input(app, view, gateway is GatewayState.Running)
     }
 }
@@ -109,14 +116,19 @@ private fun Running(turn: Turn, app: HrApp) {
 private fun toolText(line: ToolLine) = (if (line.running) "⏳ " else "✓ ") + line.label
 
 @Composable
-private fun GatewayBanner(state: GatewayState, actions: HrActions) {
+private fun GatewayBanner(state: GatewayState, actions: HrActions, canStart: Boolean) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("The gateway is not running.")
-            if (state is GatewayState.Starting) {
-                Text("Starting the gateway…")
-            } else {
-                Button(onClick = actions.startGateway) { Text("Start") }
+            val message = when (state) {
+                is GatewayState.Starting -> "Starting the gateway…"
+                GatewayState.Stopping -> "Stopping the gateway…"
+                is GatewayState.Failed -> "The gateway could not start: ${state.reason}"
+                is GatewayState.StoppedUnexpectedly -> "The gateway stopped unexpectedly (exit ${state.exitCode ?: "unknown"})."
+                else -> "The gateway is not running."
+            }
+            Text(message)
+            if (state !is GatewayState.Starting && state != GatewayState.Stopping) {
+                Button(onClick = actions.startGateway, enabled = canStart) { Text("Start") }
             }
         }
     }
