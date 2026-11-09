@@ -7,7 +7,7 @@ class RedactTest {
 
     @Test
     fun everySecretIsReplaced() {
-        assertEquals("a [redacted] b [redacted]", redact("a one b two", listOf("one", "two")))
+        assertEquals("a [redacted] b [redacted]", redact("a secret-one b secret-two", listOf("secret-one", "secret-two")))
     }
 
     @Test
@@ -17,7 +17,12 @@ class RedactTest {
 
     @Test
     fun theLongestSecretGoesFirst() {
-        assertEquals("[redacted]", redact("abcdef", listOf("abc", "abcdef")))
+        assertEquals("[redacted]", redact("abcdefghij", listOf("abcdefgh", "abcdefghij")))
+    }
+
+    @Test
+    fun secretsShorterThanEightCharactersAreIgnored() {
+        assertEquals("FOO_TOKEN=1 and [redacted]", redact("FOO_TOKEN=1 and 12345678", listOf("1", "12345678")))
     }
 
     @Test

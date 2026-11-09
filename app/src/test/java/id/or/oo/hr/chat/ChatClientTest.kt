@@ -157,6 +157,20 @@ class ChatClientTest {
     }
 
     @Test
+    fun approvalTextIsRedacted() {
+        server.stream = { x ->
+            x.eventStreamHead()
+            val ask = JSONObject().put("run_id", "r1").put("command", "curl -H 'Bearer sk-secret' tg-token").put("description", "uses sk-secret")
+            x.write("event: approval.request\ndata: $ask\n\n")
+            x.write(finish())
+        }
+        send(client(secrets = listOf("sk-secret", "tg-token")))
+        val approval = events.first() as ChatEvent.Approval
+        assertEquals("curl -H 'Bearer [redacted]' [redacted]", approval.command)
+        assertEquals("uses [redacted]", approval.description)
+    }
+
+    @Test
     fun theLastFinishFrameWins() {
         server.stream = { x ->
             x.eventStreamHead()

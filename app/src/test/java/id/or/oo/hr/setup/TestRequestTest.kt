@@ -91,9 +91,9 @@ class TestRequestTest {
 
     @Test
     fun everySecretInARejectedBodyIsRedacted() {
-        reply = response(401, "invalid api key: sk-one and tok-two, sk-one again")
+        reply = response(401, "invalid api key: sk-one-key and tok-two-key, sk-one-key again")
 
-        val result = TestRequest(UrlHttp(), { "sk-one" }, url, { listOf("sk-one", "", "tok-two") }).send()
+        val result = TestRequest(UrlHttp(), { "sk-one-key" }, url, { listOf("sk-one-key", "", "tok-two-key") }).send()
 
         assertEquals(TestResult.Rejected(401, "invalid api key: [redacted] and [redacted], [redacted] again"), result)
     }
