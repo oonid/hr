@@ -345,7 +345,77 @@ class ChatControllerTest {
         val chat = open()
         controller.send("hi")
         nextCall().outcome.completeExceptionally(IOException("socket closed"))
-        assertEquals("socket closed", ended(chat.id, 1).error)
+        assertEquals("the request failed", ended(chat.id, 1).error)
+    }
+
+    @Test
+    fun aFailedRequestKeepsItsMessageOutOfTheView() {
+        val chat = open()
+        controller.send("hi")
+        nextCall().outcome.completeExceptionally(IllegalArgumentException("Bearer secret"))
+        val done = ended(chat.id, 1)
+        assertEquals("the request failed", done.error)
+        assertFalse(done.error!!.contains("secret"))
+    }
+
+    @Test
+    fun aTurnThatEndsElsewhereLeavesTheOpenViewAlone() {
+        val other = saved("other")
+        val chat = open()
+        controller.send("hi")
+        val call = nextCall()
+        val sentAt = store.load(chat.id)!!.updatedAt
+        call.onEvent(ChatEvent.Text("partial"))
+        awaitView { it?.turn?.text == "partial" }
+        controller.open(other.id)
+        awaitView { it?.conversation?.id == other.id }
+        call.outcome.complete(TurnOutcome.Broken("x"))
+        awaitList { l -> l.any { it.id == chat.id && it.updatedAt > sentAt } }
+        val view = controller.view.value!!
+        assertEquals(ChatView(other, null, null), view)
+        assertEquals(ChatMessage(false, "partial", interrupted = true), store.load(chat.id)!!.messages[1])
+    }
+
+    @Test
+    fun aFailedAnswerElsewhereLeavesTheOpenViewAlone() {
+        val other = saved("other")
+        open()
+        controller.send("hi")
+        val call = nextCall()
+        call.onEvent(ChatEvent.Approval("run-1", "a", "one", "", listOf("once")))
+        awaitView { it?.turn?.approval != null }
+        controller.answer("once")
+        val answer = nextAnswer()
+        controller.open(other.id)
+        awaitView { it?.conversation?.id == other.id }
+        answer.result.complete(false)
+        drain()
+        assertEquals(ChatView(other, null, null, busyElsewhere = true), controller.view.value)
+    }
+
+    @Test
+    fun theListIsReadWhenTheControllerStarts() {
+        saved("a")
+        assertEquals(listOf("a"), awaitList { it.isNotEmpty() }.map { it.id })
+    }
+
+    @Test
+    fun aTurnInAnotherChatMakesTheViewBusyElsewhere() {
+        val other = saved("other")
+        val chat = open()
+        assertFalse(controller.view.value!!.busyElsewhere)
+        controller.send("hi")
+        val call = nextCall()
+        assertFalse(controller.view.value!!.busyElsewhere)
+        controller.newChat()
+        assertTrue(controller.view.value!!.busyElsewhere)
+        controller.open(chat.id)
+        assertFalse(controller.view.value!!.busyElsewhere)
+        controller.open(other.id)
+        assertTrue(awaitView { it?.conversation?.id == other.id }!!.busyElsewhere)
+        call.outcome.complete(TurnOutcome.Finished("stop"))
+        awaitView { it?.busyElsewhere == false }
+        assertEquals(other.id, controller.view.value!!.conversation.id)
     }
 
     @Test
@@ -458,6 +528,12 @@ class ChatControllerTest {
         assertEquals("couldn't send the answer to Hermes", kept.error)
         assertEquals(approval, kept.turn!!.approval)
         assertFalse(kept.turn.answering)
+
+        controller.answer("deny")
+        nextAnswer().result.complete(true)
+        val cleared = awaitView { it?.turn?.approval == null }!!
+        assertNull(cleared.error)
+        assertFalse(cleared.turn!!.answering)
     }
 
     @Test
