@@ -139,8 +139,8 @@ A Kotlin/Compose app, arm64-v8a, minSdk 28, using `:proot-engine`, `:termlib` an
   for this chat and Deny. hr answers through `/runs/{id}/approval` with the pending prompt id and
   execution generation.
 - **Lost turns:** each turn carries an `Idempotency-Key`. When the gateway dies mid-turn, Hermes
-  pauses the session, and hr resolves the lost turn (`/runs/{id}/resolve-unknown`) before the next
-  message.
+  pauses the session, and hr keeps every lost turn and resolves them, oldest first, before the next
+  message (`/runs/{id}/resolve-unknown`).
 - Chat needs the gateway; when it is not running, the screen says why and offers to start it.
 
 ## 10. Updates (M4)
