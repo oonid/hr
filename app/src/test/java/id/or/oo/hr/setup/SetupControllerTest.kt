@@ -108,6 +108,8 @@ class SetupControllerTest {
     private val store by lazy { ProfileStore(HrFiles(tmp.root)) }
     private val empty = SetupStatus(false, null, null, null, emptySet(), false, 0)
     private var shown: SetupStatus? = null
+    private var reader: (() -> SetupStatus)? = null
+    private val gate = CompletableDeferred<Unit>()
     private val controller by lazy {
         SetupController(
             login,
@@ -117,7 +119,7 @@ class SetupControllerTest {
             { calls += "restart"; restartWith() },
             { configured },
             scope,
-            readStatus = { shown ?: readStatus(HrFiles(tmp.root).profileDir) },
+            readStatus = { reader?.invoke() ?: shown ?: readStatus(HrFiles(tmp.root).profileDir) },
         )
     }
 
@@ -262,7 +264,7 @@ class SetupControllerTest {
 
         controller.saveTelegram("123:abc", "1")
 
-        assertEquals(SetupStep.Saved("Telegram"), await { it is SetupStep.Saved })
+        assertEquals(SetupStep.Saved("Telegram saved."), await { it is SetupStep.Saved })
         assertFalse("restart" in calls)
     }
 
@@ -463,13 +465,80 @@ class SetupControllerTest {
     @Test
     fun removeTelegramWithoutAProviderIsSaved() {
         configured = false
+        val withToken = empty.copy(telegramToken = true, telegramUsers = 1)
+        var removed = false
+        shown = null
+        reader = { if (removed) empty else withToken }
+        awaitStatus { it == withToken }
         store.ensureProfile()
         store.writeProfileEnv(mapOf("TELEGRAM_BOT_TOKEN" to "1:a"))
+        removed = true
 
         controller.removeTelegram()
 
-        assertEquals(SetupStep.Saved("Telegram removed"), await { it is SetupStep.Saved })
+        assertEquals(SetupStep.Saved("Telegram removed."), await { it is SetupStep.Saved })
         assertFalse("restart" in calls)
-        assertFalse(controller.status.value.telegramToken)
+        assertEquals(empty, controller.status.value)
+    }
+
+    @Test
+    fun removeTelegramFailureIsAnError() {
+        store.ensureProfile()
+        store.writeProfileEnv(mapOf("TELEGRAM_BOT_TOKEN" to "1:a"))
+        val dir = HrFiles(tmp.root).profileDir
+        reader = { empty }
+        dir.setWritable(false)
+
+        controller.removeTelegram()
+
+        try {
+            assertTrue(await { it is SetupStep.Error } is SetupStep.Error)
+        } finally {
+            dir.setWritable(true)
+        }
+        assertFalse("restart" in calls)
+    }
+
+    @Test
+    fun removeTelegramWhileBusyIsIgnored() {
+        reader = { empty }
+        restartWith = { gate.await(); null }
+        controller.test()
+        await { it == SetupStep.Testing }
+
+        controller.removeTelegram()
+
+        assertEquals(SetupStep.Testing, controller.step.value)
+        gate.complete(Unit)
+        await { it is SetupStep.Done }
+        assertEquals(listOf("restart", "send"), calls)
+    }
+
+    @Test
+    fun aSlowEarlierReadDoesNotOverwriteANewerOne() {
+        val stale = empty
+        val fresh = empty.copy(telegramToken = true)
+        val entered = CompletableDeferred<Unit>()
+        val release = java.util.concurrent.CountDownLatch(1)
+        val reads = java.util.concurrent.atomic.AtomicInteger()
+        reader = {
+            if (reads.incrementAndGet() == 1) {
+                entered.complete(Unit)
+                release.await()
+                stale
+            } else {
+                fresh
+            }
+        }
+        controller.step
+        runBlocking { withTimeout(5_000) { entered.await() } }
+
+        controller.refreshStatus()
+        awaitStatus { it == fresh }
+        release.countDown()
+        waitFor { reads.get() >= 2 }
+        runBlocking { withTimeout(5_000) { scope.coroutineContext[Job]!!.children.forEach { it.join() } } }
+
+        assertEquals(fresh, controller.status.value)
     }
 }

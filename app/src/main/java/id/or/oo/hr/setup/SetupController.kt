@@ -22,7 +22,7 @@ sealed interface SetupStep {
     data class ChatGpt(val login: LoginState, val models: List<String>?, val loadingModels: Boolean) : SetupStep
     data object Saving : SetupStep
     data object Testing : SetupStep
-    data class Saved(val what: String) : SetupStep
+    data class Saved(val message: String) : SetupStep
     data class Done(val result: TestResult) : SetupStep
     data class Error(val reason: String) : SetupStep
 }
@@ -39,6 +39,9 @@ class SetupController(
     private val io: CoroutineDispatcher = Dispatchers.IO,
 ) {
     private val lock = Any()
+    private val statusLock = Any()
+    private var issued = 0L
+    private var published = 0L
     private var job: Job? = null
     private var checking = false
     private val mutableStep = MutableStateFlow<SetupStep>(SetupStep.Choose)
@@ -90,7 +93,7 @@ class SetupController(
             settle(me, SetupStep.Testing)
             runTest(me)
         } else {
-            settle(me, SetupStep.Saved("Telegram removed"))
+            settle(me, SetupStep.Saved("Telegram removed."))
         }
     }
 
@@ -158,7 +161,7 @@ class SetupController(
         refresh()
         when {
             failure != null -> settle(me, SetupStep.Error(failure.message ?: failure.javaClass.simpleName))
-            telegram && !withContext(io) { configured() } -> settle(me, SetupStep.Saved(TELEGRAM))
+            telegram && !withContext(io) { configured() } -> settle(me, SetupStep.Saved("Telegram saved."))
             else -> {
                 settle(me, SetupStep.Testing)
                 runTest(me)
@@ -167,7 +170,14 @@ class SetupController(
     }
 
     private suspend fun refresh() {
-        mutableStatus.value = withContext(io) { readStatus() }
+        val ticket = synchronized(statusLock) { ++issued }
+        val read = withContext(io) { readStatus() }
+        synchronized(statusLock) {
+            if (ticket > published) {
+                published = ticket
+                mutableStatus.value = read
+            }
+        }
     }
 
     private suspend fun runTest(me: Job) {
@@ -193,7 +203,6 @@ class SetupController(
 
     private companion object {
         const val CODEX = "openai-codex"
-        const val TELEGRAM = "Telegram"
         const val NO_PROVIDER = "choose a provider and save it first"
     }
 }

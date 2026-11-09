@@ -61,7 +61,7 @@ fun SetupScreen(app: HrApp, actions: HrActions, modifier: Modifier) {
             is SetupStep.ChatGpt -> ChatGptStep(current, controller, actions)
             SetupStep.Saving -> Busy("Saving…")
             SetupStep.Testing -> Busy("Restarting the gateway and sending a test request…")
-            is SetupStep.Saved -> Finished("${current.what} saved.", false, controller, actions)
+            is SetupStep.Saved -> Finished(current.message, false, controller, actions)
             is SetupStep.Done -> Finished(describe(current.result), true, controller, actions)
             is SetupStep.Error -> Finished(current.reason, true, controller, actions)
         }
