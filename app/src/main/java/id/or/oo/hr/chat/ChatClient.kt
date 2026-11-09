@@ -73,6 +73,9 @@ class ChatClient(
                 } catch (e: IOException) {
                     ensureActive()
                     finish?.let { TurnOutcome.Finished(it) } ?: TurnOutcome.Broken(brokenReason(e))
+                } catch (e: RuntimeException) {
+                    ensureActive()
+                    throw e
                 } finally {
                     watcher.cancel()
                 }
