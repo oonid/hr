@@ -18,6 +18,7 @@ import java.io.IOException
 import java.io.InputStreamReader
 import java.net.ConnectException
 import java.net.HttpURLConnection
+import java.net.SocketTimeoutException
 import java.net.URL
 import java.security.MessageDigest
 
@@ -27,7 +28,7 @@ sealed interface TurnOutcome {
     data class Finished(val reason: String) : TurnOutcome
     data class Rejected(val code: Int, val body: String) : TurnOutcome
     data object NoGateway : TurnOutcome
-    data class Broken(val reason: String) : TurnOutcome
+    data class Broken(val reason: String, val lost: Boolean = false) : TurnOutcome
 }
 
 interface ChatTurns {
@@ -64,7 +65,7 @@ class ChatClient(
                         if (it is ChatEvent.Finished) finish = it.reason
                         if (it is ChatEvent.Done) done = true
                         onEvent(it)
-                    }.let { outcome -> outcome ?: finish?.let { TurnOutcome.Finished(it) } ?: if (done) TurnOutcome.Finished("stop") else TurnOutcome.Broken(EARLY) }
+                    }.let { outcome -> outcome ?: finish?.let { TurnOutcome.Finished(it) } ?: if (done) TurnOutcome.Finished("stop") else TurnOutcome.Broken(EARLY, lost = true) }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: ConnectException) {
@@ -72,7 +73,7 @@ class ChatClient(
                     TurnOutcome.NoGateway
                 } catch (e: IOException) {
                     ensureActive()
-                    finish?.let { TurnOutcome.Finished(it) } ?: TurnOutcome.Broken(brokenReason(e))
+                    finish?.let { TurnOutcome.Finished(it) } ?: TurnOutcome.Broken(brokenReason(e), lost = e !is SocketTimeoutException)
                 } catch (e: RuntimeException) {
                     ensureActive()
                     throw e
@@ -111,7 +112,7 @@ class ChatClient(
         }
         BufferedReader(InputStreamReader(connection.inputStream, Charsets.UTF_8)).use { reader ->
             readSse(generateSequence { reader.readLine() }.iterator()) { frame ->
-                chatEvent(frame)?.let(onEvent)
+                chatEvent(frame)?.let { onEvent(if (it is ChatEvent.Tool) it.copy(label = redact(it.label, secrets())) else it) }
             }
         }
         return null

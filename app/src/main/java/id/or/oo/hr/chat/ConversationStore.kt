@@ -19,7 +19,7 @@ data class Conversation(
     val title: String,
     val updatedAt: Long,
     val messages: List<ChatMessage>,
-    val pendingTurn: String? = null,
+    val pendingTurns: List<String> = emptyList(),
 )
 
 private val ID_PATTERN = Regex("^[A-Za-z0-9-]{1,64}$")
@@ -76,7 +76,7 @@ private fun encode(c: Conversation): JSONObject {
         .put("title", c.title)
         .put("updatedAt", c.updatedAt)
         .put("messages", JSONArray(c.messages.map { encode(it) }))
-    if (c.pendingTurn != null) json.put("pendingTurn", c.pendingTurn)
+    if (c.pendingTurns.isNotEmpty()) json.put("pendingTurns", JSONArray(c.pendingTurns))
     return json
 }
 
@@ -94,16 +94,20 @@ private fun decode(json: JSONObject, expectedId: String): Conversation? {
     val title = json.opt("title") as? String ?: return null
     val updatedAt = (json.opt("updatedAt") as? Number)?.toLong() ?: return null
     val array = json.opt("messages") as? JSONArray ?: return null
-    val pendingTurn = when (val raw = json.opt("pendingTurn")) {
-        null, JSONObject.NULL -> null
-        is String -> raw
+    val pendingTurns = when (val raw = json.opt("pendingTurns")) {
+        null, JSONObject.NULL -> when (val legacy = json.opt("pendingTurn")) {
+            null, JSONObject.NULL -> emptyList()
+            is String -> listOf(legacy)
+            else -> return null
+        }
+        is JSONArray -> (0 until raw.length()).map { raw.opt(it) as? String ?: return null }
         else -> return null
     }
     val messages = ArrayList<ChatMessage>(array.length())
     for (i in 0 until array.length()) {
         messages.add(decodeMessage(array.opt(i) as? JSONObject ?: return null) ?: return null)
     }
-    return Conversation(id, sessionId, title, updatedAt, messages, pendingTurn)
+    return Conversation(id, sessionId, title, updatedAt, messages, pendingTurns)
 }
 
 private fun decodeMessage(json: JSONObject): ChatMessage? {

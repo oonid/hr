@@ -45,10 +45,11 @@ class ChatController(
     private class Active(
         val job: Job,
         val conversation: Conversation,
+        val turnId: String,
         var turn: Turn,
-        var unresolved: String?,
+        var unresolved: List<String>,
         var stopped: Boolean = false,
-        var lost: Boolean = false,
+        var failed: Boolean = false,
     )
 
     private val lock = Any()
@@ -134,19 +135,19 @@ class ChatController(
                 return false
             }
             val turnId = newId()
-            val previous = current.pendingTurn
+            val previous = current.pendingTurns
             val conversation = current.copy(
                 title = if (current.messages.isEmpty()) titleFor(message) else current.title,
                 updatedAt = clock(),
                 messages = current.messages + ChatMessage(true, message),
-                pendingTurn = turnId,
+                pendingTurns = (previous + turnId).takeLast(MAX_PENDING),
             )
             opened = conversation
             error = null
             val next = scope.launch(start = CoroutineStart.LAZY) {
                 runTurn(coroutineContext[Job]!!, conversation, turnId, previous, message)
             }
-            active = Active(next, conversation, Turn("", emptyList(), null, false), previous)
+            active = Active(next, conversation, turnId, Turn("", emptyList(), null, false), previous)
             publish()
             next.invokeOnCompletion { finish(next, null) }
             next.start()
@@ -209,13 +210,13 @@ class ChatController(
         }
     }
 
-    private suspend fun runTurn(me: Job, conversation: Conversation, turnId: String, previous: String?, text: String) {
+    private suspend fun runTurn(me: Job, conversation: Conversation, turnId: String, previous: List<String>, text: String) {
         val outcome = try {
             val failure = save(conversation).await()
             if (failure != null) {
                 TurnOutcome.Broken(failure)
             } else {
-                if (previous != null) resolve(me, previous)
+                resolve(me, previous)
                 client.send(conversation.sessionId, turnId, text) { fold(me, it) }.also { awaitGatewayIfLost(me, it) }
             }
         } catch (e: CancellationException) {
@@ -226,18 +227,21 @@ class ChatController(
         finish(me, outcome)
     }
 
-    private suspend fun resolve(me: Job, turnId: String) {
-        val resolved = try {
-            client.resolveLost(turnId)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            false
-        }
-        if (!resolved) return
-        synchronized(lock) {
-            val running = active ?: return
-            if (running.job === me) running.unresolved = null
+    private suspend fun resolve(me: Job, pending: List<String>) {
+        for (turnId in pending) {
+            val resolved = try {
+                client.resolveLost(turnId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                false
+            }
+            if (!resolved) return
+            synchronized(lock) {
+                val running = active ?: return
+                if (running.job !== me) return
+                running.unresolved = running.unresolved - turnId
+            }
         }
     }
 
@@ -246,8 +250,9 @@ class ChatController(
         synchronized(lock) {
             val running = active ?: return
             if (running.job !== me) return
-            running.lost = true
+            running.failed = true
         }
+        if (outcome is TurnOutcome.Broken && !outcome.lost) return
         withTimeoutOrNull(gatewayWaitMs) { gateway.first { it !is GatewayState.Running } }
     }
 
@@ -282,18 +287,18 @@ class ChatController(
             if (running.job !== me) return
             active = null
             val (interrupted, reason) = if (running.stopped || outcome == null) true to null else ending(outcome, gateway.value is GatewayState.Running)
-            val clears = !running.lost && (running.stopped || outcome == null || outcome is TurnOutcome.Finished)
-            val pending = running.unresolved ?: running.conversation.pendingTurn.takeUnless { clears }
+            val clears = !running.failed && (running.stopped || outcome == null || outcome is TurnOutcome.Finished)
+            val pending = (running.unresolved + listOfNotNull(running.turnId.takeUnless { clears })).takeLast(MAX_PENDING)
             val text = running.turn.text.trim()
             val tools = running.turn.tools.map { it.label }
             val reply = if (text.isEmpty() && tools.isEmpty()) emptyList() else listOf(ChatMessage(false, text, tools, interrupted))
-            val conversation = if (reply.isEmpty() && pending == running.conversation.pendingTurn) {
+            val conversation = if (reply.isEmpty() && pending == running.conversation.pendingTurns) {
                 running.conversation
             } else {
                 running.conversation.copy(
                     updatedAt = clock(),
                     messages = running.conversation.messages + reply,
-                    pendingTurn = pending,
+                    pendingTurns = pending,
                 ).also { save(it) }
             }
             if (opened?.id == conversation.id) {
@@ -356,5 +361,6 @@ class ChatController(
         const val GATEWAY_STOPPED = "the gateway stopped during the reply"
         const val ANSWER_FAILED = "couldn't send the answer to Hermes"
         const val REQUEST_FAILED = "the request failed"
+        const val MAX_PENDING = 10
     }
 }
