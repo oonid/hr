@@ -6,7 +6,7 @@
 
 **Architecture:** Setup logic lives in a new package `id.or.oo.hr.setup`, behind small interfaces with JVM tests; `SetupScreen` is thin. Hermes commands (the login, the model list, `hermes config set`) run as one-shot `pr-cli login hermes … -- <command>` processes through pr's `PrCliCommand`, with the profile bound as in the terminal, under a `SessionManager` task so the process survives while the user approves the login in a browser. hr writes the profile's `.env` itself (`mergeEnv`, `writePrivate`); `config.yaml` changes go through `hermes config set`, which merges into whatever Hermes or `hermes setup` already wrote. The test request goes to hr's own gateway at `/p/android/v1/chat/completions` with the profile's `API_SERVER_KEY`.
 
-**Tech Stack:** as M1 (`docs/plans/m1-gateway.md`), on AGP 9.4.1, Kotlin 2.4.21, compileSdk 37, Compose BOM 2026.09.00 and pr at `9c06739` or later.
+**Tech Stack:** as M1 (`docs/plans/m1-gateway.md`), on AGP 9.4.1, Kotlin 2.4.21, compileSdk 37, Compose BOM 2026.09.00 and pr at `7029b1f` or later (it stops a cancelled sign-in; `9c06739` left the `hermes auth add` process running).
 
 **Spec:** `docs/design/hr-app.md` §4 (M2), §5, §6, §8; findings from the M2 investigation on the phone (2026-11-08), summarised below.
 
