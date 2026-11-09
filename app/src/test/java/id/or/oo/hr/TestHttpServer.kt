@@ -24,7 +24,6 @@ class TestHttpServer(private val respond: (path: String, headers: Map<String, St
             socket.close()
         }
 
-
         fun write(text: String): Boolean = write(text.toByteArray())
 
         fun write(bytes: ByteArray): Boolean = try {

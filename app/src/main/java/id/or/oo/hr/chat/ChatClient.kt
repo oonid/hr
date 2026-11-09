@@ -47,6 +47,7 @@ class ChatClient(
             val connection = URL("$base/chat/completions").openConnection() as HttpURLConnection
             coroutineScope {
                 var finish: String? = null
+                var done = false
                 val watcher = launch(start = CoroutineStart.UNDISPATCHED) {
                     try {
                         awaitCancellation()
@@ -57,8 +58,9 @@ class ChatClient(
                 try {
                     exchange(connection, sessionId, text, { isActive }) {
                         if (it is ChatEvent.Finished) finish = it.reason
+                        if (it is ChatEvent.Done) done = true
                         onEvent(it)
-                    }.let { outcome -> outcome ?: finish?.let { TurnOutcome.Finished(it) } ?: TurnOutcome.Broken(EARLY) }
+                    }.let { outcome -> outcome ?: finish?.let { TurnOutcome.Finished(it) } ?: if (done) TurnOutcome.Finished("stop") else TurnOutcome.Broken(EARLY) }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: ConnectException) {
