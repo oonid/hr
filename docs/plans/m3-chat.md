@@ -17,7 +17,7 @@ Read from Hermes 0.23.0 (`gateway/platforms/api_server*.py`) and measured on the
 - `POST /p/android/v1/chat/completions` with `"stream": true` answers `200`, `Content-Type: text/event-stream`, and echoes `X-Hermes-Session-Id`. Frames are `data: <json>\n\n`, optionally preceded by `event: <name>\n`:
   - `chat.completion.chunk` with `choices[0].delta.role`, `delta.content` (text pieces), `delta.reasoning_content` (ignored by hr), and a last chunk with `finish_reason` (`stop`, or `length` etc. with a `hermes` object) and `usage`;
   - `event: hermes.tool.progress` with `{"tool", "emoji", "label", "toolCallId", "status": "running"}`, later `{"tool", "toolCallId", "status": "completed"}`;
-  - `event: approval.request` with `{"event", "run_id", "command", "description", "choices": ["once", …, "deny"], …}` (sometimes `request_id`); the turn waits until `POST /p/android/v1/runs/{run_id}/approval` with `{"choice": "once" | "deny"}` (plus `request_id` when given);
+  - `event: approval.request` with `{"event", "run_id", "command", "description", "choices": ["once", …, "deny"], …}` (sometimes `request_id`); the turn waits until `POST /p/android/v1/runs/{run_id}/approval` with exactly `{"request_id", "execution_generation", "choice"}` (Hermes rejects any other body with HTTP 400); `GET /p/android/v1/runs/{run_id}` returns `pending_controls`, whose `kind: "approval"` entries carry the `prompt_id` (the `request_id` to send), the `execution_generation` and the offered `choices`;
   - `event: hermes.status` (ignored by hr); `: keepalive` comment lines every 10 s while the agent is quiet; finally `data: [DONE]`.
 - Measured: a turn that ran `date +%Y` streamed its first frame at 0.2 s, tool running at 4.9 s, completed at 7.4 s, text at 9.1 s, `[DONE]` at 9.6 s.
 - With `X-Hermes-Session-Id: <id>` the server keeps the conversation (history, including tool calls and results) in the profile's session store: a second turn that sent only the new message was answered from the first turn. Ids are at most 256 characters, no CR/LF/NUL, no path tricks. Without the header the server derives an id from the first user message and uses only the history in the body, which drops tool calls.
@@ -31,7 +31,7 @@ Read from Hermes 0.23.0 (`gateway/platforms/api_server*.py`) and measured on the
 - Coverage: every new unit in `id.or.oo.hr.chat` keeps 80% of its lines or more.
 - No device model numbers, marketing names or serials; adb commands use bare `adb`.
 - Files hr writes go through `writePrivate` (owner-only, written then renamed).
-- The API key is read from `ProfileStore.apiServerKey()` at send time and goes only into the `Authorization: Bearer` header; error bodies shown in the UI are redacted with `ProfileStore.secrets()` (as `TestRequest` does).
+- The API key is read from `ProfileStore.apiServerKey()` at send time and goes only into the `Authorization: Bearer` header, plus (for lost-turn recovery) a SHA-256 of `"android\0<key>"` in the `/runs/` path, which is Hermes's own run-id scope and cannot be reversed; error bodies shown in the UI are redacted with `ProfileStore.secrets()` (as `TestRequest` does).
 - No new library dependencies.
 
 ## Review Focus
