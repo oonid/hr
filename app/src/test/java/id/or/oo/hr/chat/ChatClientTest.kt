@@ -265,22 +265,98 @@ class ChatClientTest {
         assertEquals(ChatEvent.Text("hi 👋 there"), events.first())
     }
 
-    @Test
-    fun anApprovalAnswerIsPosted() {
-        val ok = runBlocking { client().answer("run-1", "req-9", "once") }
-        assertTrue(ok)
-        assertEquals("/p/android/v1/runs/run-1/approval", server.requests.single())
-        assertEquals("POST", server.methods.single())
-        assertEquals("Bearer sk-secret", server.seenHeaders.single()["authorization"])
-        val body = JSONObject(server.bodies.single())
-        assertEquals("once", body.getString("choice"))
-        assertEquals("req-9", body.getString("request_id"))
+    private fun pending(id: String, generation: Int, vararg choices: String) = JSONObject()
+        .put("kind", "approval")
+        .put("prompt_id", id)
+        .put("execution_generation", generation)
+        .put("command", "ls")
+        .put("choices", org.json.JSONArray(choices.toList()))
+
+    private fun runWith(vararg controls: JSONObject) = JSONObject()
+        .put("object", "hermes.run")
+        .put("pending_controls", org.json.JSONArray(controls.toList()))
+        .put("execution_generation", 2)
+        .put("status", "started")
+        .toString()
+
+    private fun serveRun(run: String, postCode: Int = 200) {
+        server.stream = { x ->
+            if (x.path.endsWith("/approval")) x.write(response(postCode, "{}")) else x.write(response(200, run))
+        }
     }
 
     @Test
-    fun anApprovalWithoutARequestIdOmitsIt() {
-        runBlocking { client().answer("run-1", null, "deny") }
-        assertFalse(JSONObject(server.bodies.single()).has("request_id"))
+    fun anApprovalAnswerSendsTheExactBodyHermesRequires() {
+        serveRun(runWith(pending("p1", 6, "once", "session", "deny")))
+        val ok = runBlocking { client().answer("run-1", "p1", "deny") }
+        assertTrue(ok)
+        assertEquals(listOf("/p/android/v1/runs/run-1", "/p/android/v1/runs/run-1/approval"), server.requests.toList())
+        assertEquals(listOf("GET", "POST"), server.methods.toList())
+        assertEquals("Bearer sk-secret", server.seenHeaders.last()["authorization"])
+        val body = JSONObject(server.bodies.last())
+        assertEquals(setOf("request_id", "execution_generation", "choice"), body.keys().asSequence().toSet())
+        assertEquals("p1", body.getString("request_id"))
+        assertEquals(6, body.get("execution_generation"))
+        assertEquals("deny", body.getString("choice"))
+    }
+
+    @Test
+    fun anApprovalAnswerMatchesTheEventsRequestId() {
+        serveRun(runWith(pending("p1", 3, "once", "deny"), pending("p2", 4, "once", "deny")))
+        assertTrue(runBlocking { client().answer("run-1", "p2", "once") })
+        val body = JSONObject(server.bodies.last())
+        assertEquals("p2", body.getString("request_id"))
+        assertEquals(4, body.get("execution_generation"))
+    }
+
+    @Test
+    fun anApprovalWithoutARequestIdAnswersTheFirstPending() {
+        serveRun(runWith(pending("p1", 3, "once", "deny"), pending("p2", 4, "once", "deny")))
+        assertTrue(runBlocking { client().answer("run-1", null, "once") })
+        assertEquals("p1", JSONObject(server.bodies.last()).getString("request_id"))
+    }
+
+    @Test
+    fun anApprovalFallsBackToTheRunsGeneration() {
+        val entry = pending("p1", 3, "once").also { it.remove("execution_generation") }
+        serveRun(runWith(entry))
+        assertTrue(runBlocking { client().answer("run-1", "p1", "once") })
+        assertEquals(2, JSONObject(server.bodies.last()).get("execution_generation"))
+    }
+
+    @Test
+    fun anAlreadyResolvedApprovalCountsAsAnswered() {
+        serveRun(runWith())
+        assertTrue(runBlocking { client().answer("run-1", "p1", "once") })
+        assertEquals(1, server.requests.size)
+    }
+
+    @Test
+    fun aChoiceHermesDoesNotOfferIsRefused() {
+        serveRun(runWith(pending("p1", 6, "once", "deny")))
+        assertFalse(runBlocking { client().answer("run-1", "p1", "session") })
+        assertEquals(1, server.requests.size)
+    }
+
+    @Test
+    fun aRejectedAnswerIsFalse() {
+        serveRun(runWith(pending("p1", 6, "once", "deny")), postCode = 400)
+        assertFalse(runBlocking { client().answer("run-1", "p1", "once") })
+        assertEquals(2, server.requests.size)
+    }
+
+    @Test
+    fun anUnreadableRunIsFalse() {
+        serveRun("not json")
+        assertFalse(runBlocking { client().answer("run-1", "p1", "once") })
+        assertEquals(1, server.requests.size)
+    }
+
+    @Test
+    fun aRunIdIsEncodedInTheApprovalPath() {
+        serveRun(runWith(pending("p1", 6, "once")))
+        assertTrue(runBlocking { client().answer("chatcmpl-a/b c", "p1", "once") })
+        assertEquals("/p/android/v1/runs/chatcmpl-a%2Fb%20c/approval", server.requests.last())
     }
 
     @Test
@@ -306,6 +382,8 @@ class ChatClientTest {
             if (x.path.endsWith("/approval")) {
                 x.write(response(200, "{}"))
                 approved.countDown()
+            } else if (x.path.endsWith("/runs/r1")) {
+                x.write(response(200, runWith(pending("p1", 1, "once"))))
             } else {
                 x.eventStreamHead()
                 val frame = JSONObject().put("run_id", "r1").put("command", "ls")
@@ -324,7 +402,7 @@ class ChatClientTest {
                 }
             }
             assertTrue(asked.await(5, TimeUnit.SECONDS))
-            assertTrue(c.answer("r1", null, "once"))
+            assertTrue(c.answer("r1", "p1", "once"))
             assertEquals(TurnOutcome.Finished("stop"), turn.await())
         }
         assertTrue(events.first() is ChatEvent.Approval)
