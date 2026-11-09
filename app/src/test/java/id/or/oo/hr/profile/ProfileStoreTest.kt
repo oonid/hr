@@ -163,6 +163,39 @@ class ProfileStoreTest {
         assertFalse(secrets.contains("first"))
     }
 
+    @Test
+    fun removingTelegramKeepsTheRest() {
+        store.ensureProfile()
+        val env = File(files.profileDir, ".env")
+        env.writeText(
+            "OPENROUTER_API_KEY=k\nTELEGRAM_BOT_TOKEN=123:abc\nexport TELEGRAM_ALLOWED_USERS = 1,2\n" +
+                "API_SERVER_KEY=${store.apiServerKey()}\nFOO=bar\n",
+        )
+
+        store.removeFromProfileEnv(setOf("TELEGRAM_BOT_TOKEN", "TELEGRAM_ALLOWED_USERS"))
+
+        assertEquals("OPENROUTER_API_KEY=k\nAPI_SERVER_KEY=${store.apiServerKey()}\nFOO=bar\n", env.readText())
+        assertEquals("rw-------", permissions(env))
+    }
+
+    @Test
+    fun removingFromAMissingEnvDoesNothing() {
+        store.removeFromProfileEnv(setOf("TELEGRAM_BOT_TOKEN"))
+
+        assertFalse(File(files.profileDir, ".env").exists())
+    }
+
+    @Test
+    fun removingEveryLineLeavesAnEmptyEnv() {
+        store.ensureProfile()
+        val env = File(files.profileDir, ".env")
+        env.writeText("TELEGRAM_BOT_TOKEN=x\n")
+
+        store.removeFromProfileEnv(setOf("TELEGRAM_BOT_TOKEN"))
+
+        assertEquals("", env.readText())
+    }
+
     private fun configWith(text: String): ProfileStore {
         store.ensureProfile()
         File(files.profileDir, "config.yaml").writeText(text)
