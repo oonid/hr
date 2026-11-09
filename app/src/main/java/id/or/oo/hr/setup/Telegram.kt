@@ -37,6 +37,15 @@ suspend fun ProfileSettings.useTelegram(token: String, allowedUsers: String): Re
     }
 }
 
+suspend fun ProfileSettings.removeTelegram(): Result<Unit> = try {
+    profiles.removeFromProfileEnv(setOf("TELEGRAM_BOT_TOKEN", "TELEGRAM_ALLOWED_USERS"))
+    Result.success(Unit)
+} catch (e: CancellationException) {
+    throw e
+} catch (e: Exception) {
+    Result.failure(e)
+}
+
 private suspend fun ProfileSettings.hasTelegram(): Boolean {
     var present = false
     val exit = command.run(TELEGRAM_CHECK_SCRIPT) { if (it.trim() == TELEGRAM_PRESENT) present = true }

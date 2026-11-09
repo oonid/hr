@@ -15,6 +15,7 @@ import id.or.oo.hr.image.ImageStore
 import id.or.oo.hr.image.imageInUse
 import id.or.oo.hr.image.UrlHttp
 import id.or.oo.hr.profile.ProfileStore
+import id.or.oo.hr.profile.readStatus
 import id.or.oo.hr.setup.CodexLogin
 import id.or.oo.hr.setup.ControllerRestart
 import id.or.oo.hr.setup.HermesCommand
@@ -133,6 +134,7 @@ class HrApp : Application(), ProotHost, SessionHost {
             ControllerRestart(gateway.state, gateway::stop, gateway::start),
             profiles::hasProvider,
             gatewayScope,
+            { readStatus(files.profileDir) },
         )
     }
 
