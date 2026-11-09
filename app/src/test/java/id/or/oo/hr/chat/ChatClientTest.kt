@@ -13,7 +13,10 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.EOFException
+import java.io.IOException
 import java.net.ServerSocket
+import java.security.MessageDigest
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -39,7 +42,7 @@ class ChatClientTest {
         "data: " + JSONObject().put("choices", org.json.JSONArray().put(JSONObject().put("finish_reason", reason))) + "\n\n"
 
     private fun send(client: ChatClient = client(), session: String = "s1", text: String = "hi") =
-        runBlocking { client.send(session, text) { events += it } }
+        runBlocking { client.send(session, "turn-1", text) { events += it } }
 
     @Test
     fun aStreamedReplyArrivesAsEvents() {
@@ -155,7 +158,7 @@ class ChatClientTest {
         val rejecting = TestHttpServer { _, _ -> response(401, """{"error": "bad key sk-secret"}""") }
         rejecting.use {
             val c = ChatClient({ "sk-secret" }, { listOf("sk-secret") }, "http://127.0.0.1:${it.port}/p/android/v1", 2_000, 2_000)
-            val outcome = runBlocking { c.send("s", "hi") { } }
+            val outcome = runBlocking { c.send("s", "turn-1", "hi") { } }
             assertEquals(TurnOutcome.Rejected(401, """{"error": "bad key [redacted]"}"""), outcome)
         }
     }
@@ -164,7 +167,7 @@ class ChatClientTest {
     fun aRejectedBodyIsCutAtFiveHundredCharacters() {
         TestHttpServer { _, _ -> response(500, "x".repeat(900)) }.use {
             val c = ChatClient({ "k" }, { emptyList() }, "http://127.0.0.1:${it.port}/p/android/v1", 2_000, 2_000)
-            val outcome = runBlocking { c.send("s", "hi") { } } as TurnOutcome.Rejected
+            val outcome = runBlocking { c.send("s", "turn-1", "hi") { } } as TurnOutcome.Rejected
             assertEquals(500, outcome.code)
             assertEquals(500, outcome.body.length)
         }
@@ -174,7 +177,7 @@ class ChatClientTest {
     fun noServerIsNoGateway() {
         val port = ServerSocket(0).use { it.localPort }
         val c = ChatClient({ "k" }, { emptyList() }, "http://127.0.0.1:$port/p/android/v1", 2_000, 2_000)
-        assertEquals(TurnOutcome.NoGateway, runBlocking { c.send("s", "hi") { } })
+        assertEquals(TurnOutcome.NoGateway, runBlocking { c.send("s", "turn-1", "hi") { } })
     }
 
     @Test
@@ -195,7 +198,7 @@ class ChatClientTest {
         }
         runBlocking {
             val job = launch(Dispatchers.Default) {
-                client(readTimeoutMs = 30_000).send("s", "hi") { if (it is ChatEvent.Text) first.countDown() }
+                client(readTimeoutMs = 30_000).send("s", "turn-1", "hi") { if (it is ChatEvent.Text) first.countDown() }
             }
             assertTrue(first.await(5, TimeUnit.SECONDS))
             job.cancelAndJoin()
@@ -224,7 +227,7 @@ class ChatClientTest {
         val started = System.nanoTime()
         runBlocking {
             val job = launch(Dispatchers.Default) {
-                client(readTimeoutMs = 30_000).send("s", "hi") { events += it }
+                client(readTimeoutMs = 30_000).send("s", "turn-1", "hi") { events += it }
             }
             assertTrue(requested.await(5, TimeUnit.SECONDS))
             job.cancel()
@@ -315,7 +318,7 @@ class ChatClientTest {
         val c = client()
         runBlocking {
             val turn = async(Dispatchers.Default) {
-                c.send("s", "hi") {
+                c.send("s", "turn-1", "hi") {
                     events += it
                     if (it is ChatEvent.Approval) asked.countDown()
                 }
@@ -325,5 +328,100 @@ class ChatClientTest {
             assertEquals(TurnOutcome.Finished("stop"), turn.await())
         }
         assertTrue(events.first() is ChatEvent.Approval)
+    }
+
+    private fun runPath(turnId: String): String {
+        val hash = MessageDigest.getInstance("SHA-256")
+            .digest("android\u0000sk-secret".toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+        return "/p/android/v1/runs/chat:$hash:$turnId"
+    }
+
+    private fun run(status: String) = JSONObject()
+        .put("object", "hermes.run")
+        .put("pending_controls", org.json.JSONArray())
+        .put("run_id", "r")
+        .put("status", status)
+        .put("admission_id", "2a34bbbaaf014a42882c85c908d4af87")
+        .put("execution_generation", 6)
+        .toString()
+
+    @Test
+    fun theTurnIdIsSentAsIdempotencyKey() {
+        server.stream = { x ->
+            x.eventStreamHead()
+            x.write(finish())
+        }
+        runBlocking { client().send("s", "0f6c3a52-7d1e-4b8a-9c3f-2e5d6a7b8c9d", "hi") { } }
+        assertEquals("0f6c3a52-7d1e-4b8a-9c3f-2e5d6a7b8c9d", server.seenHeaders.single()["idempotency-key"])
+    }
+
+    @Test
+    fun aLostTurnIsResolved() {
+        server.stream = { x ->
+            if (x.path.endsWith("/resolve-unknown")) {
+                x.write(response(200, """{"status": "terminal", "outcome": "interrupted"}"""))
+            } else {
+                x.write(response(200, run("unknown")))
+            }
+        }
+        assertTrue(runBlocking { client().resolveLost("hrprobe1794209209") })
+        val path = runPath("hrprobe1794209209")
+        assertEquals(listOf(path, "$path/resolve-unknown"), server.requests.toList())
+        assertEquals(listOf("GET", "POST"), server.methods.toList())
+        assertTrue(server.seenHeaders.all { it["authorization"] == "Bearer sk-secret" })
+        val body = JSONObject(server.bodies[1])
+        assertEquals("2a34bbbaaf014a42882c85c908d4af87", body.getString("admission_id"))
+        assertEquals(6, body.getInt("execution_generation"))
+        assertEquals(2, body.length())
+        assertTrue(server.requests.none { it.contains("sk-secret") })
+    }
+
+    @Test
+    fun aTurnThatIsNotUnknownIsLeftAlone() {
+        server.stream = { x -> x.write(response(200, run("completed"))) }
+        assertTrue(runBlocking { client().resolveLost("t1") })
+        assertEquals(listOf(runPath("t1")), server.requests.toList())
+    }
+
+    @Test
+    fun aMissingRunCountsAsResolved() {
+        server.stream = { x -> x.write(response(404, """{"error": "not found"}""")) }
+        assertTrue(runBlocking { client().resolveLost("a/b c") })
+        assertEquals(listOf(runPath("a%2Fb%20c")), server.requests.toList())
+    }
+
+    @Test
+    fun noGatewayMeansNotResolved() {
+        val port = ServerSocket(0).use { it.localPort }
+        val c = ChatClient({ "k" }, { emptyList() }, "http://127.0.0.1:$port/p/android/v1", 2_000, 2_000)
+        assertFalse(runBlocking { c.resolveLost("t1") })
+    }
+
+    @Test
+    fun aGatewayThatFailsMeansNotResolved() {
+        val replies = mapOf(
+            "lookup fails" to { _: String -> response(500, "boom") },
+            "resolve fails" to { path: String -> if (path.endsWith("/resolve-unknown")) response(409, "{}") else response(200, run("unknown")) },
+            "not json" to { _: String -> response(200, "<html>") },
+            "no admission" to { _: String -> response(200, JSONObject().put("status", "unknown").toString()) },
+        )
+        for ((name, reply) in replies) {
+            server.stream = { x -> x.write(reply(x.path)) }
+            assertFalse(name, runBlocking { client().resolveLost("t1") })
+        }
+    }
+
+    @Test
+    fun aBlankIOExceptionSaysTheConnectionWasLost() {
+        for (thrown in listOf(EOFException(), IOException("  "))) {
+            server.stream = { x ->
+                x.eventStreamHead()
+                x.write(chunk("part"))
+                x.write(finish())
+            }
+            val outcome = runBlocking { client().send("s", "t1", "hi") { if (it is ChatEvent.Text) throw thrown } }
+            assertEquals(TurnOutcome.Broken("the connection to the gateway was lost"), outcome)
+        }
     }
 }

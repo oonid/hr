@@ -11,7 +11,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
 
 data class ToolLine(val callId: String, val label: String, val running: Boolean)
@@ -38,8 +40,16 @@ class ChatController(
     private val clock: () -> Long = System::currentTimeMillis,
     private val newId: () -> String = { UUID.randomUUID().toString() },
     io: CoroutineDispatcher = Dispatchers.IO,
+    private val gatewayWaitMs: Long = 3_000,
 ) {
-    private class Active(val job: Job, val conversation: Conversation, var turn: Turn, var stopped: Boolean = false)
+    private class Active(
+        val job: Job,
+        val conversation: Conversation,
+        var turn: Turn,
+        var unresolved: String?,
+        var stopped: Boolean = false,
+        var lost: Boolean = false,
+    )
 
     private val lock = Any()
     private var active: Active? = null
@@ -123,17 +133,20 @@ class ChatController(
                 publish()
                 return false
             }
+            val turnId = newId()
+            val previous = current.pendingTurn
             val conversation = current.copy(
                 title = if (current.messages.isEmpty()) titleFor(message) else current.title,
                 updatedAt = clock(),
                 messages = current.messages + ChatMessage(true, message),
+                pendingTurn = turnId,
             )
             opened = conversation
             error = null
             val next = scope.launch(start = CoroutineStart.LAZY) {
-                runTurn(coroutineContext[Job]!!, conversation, message)
+                runTurn(coroutineContext[Job]!!, conversation, turnId, previous, message)
             }
-            active = Active(next, conversation, Turn("", emptyList(), null, false))
+            active = Active(next, conversation, Turn("", emptyList(), null, false), previous)
             publish()
             next.invokeOnCompletion { finish(next, null) }
             next.start()
@@ -196,17 +209,46 @@ class ChatController(
         }
     }
 
-    private suspend fun runTurn(me: Job, conversation: Conversation, text: String) {
+    private suspend fun runTurn(me: Job, conversation: Conversation, turnId: String, previous: String?, text: String) {
         val outcome = try {
             val failure = save(conversation).await()
-            if (failure != null) TurnOutcome.Broken(failure)
-            else client.send(conversation.sessionId, text) { fold(me, it) }
+            if (failure != null) {
+                TurnOutcome.Broken(failure)
+            } else {
+                if (previous != null) resolve(me, previous)
+                client.send(conversation.sessionId, turnId, text) { fold(me, it) }.also { awaitGatewayIfLost(me, it) }
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             TurnOutcome.Broken(REQUEST_FAILED)
         }
         finish(me, outcome)
+    }
+
+    private suspend fun resolve(me: Job, turnId: String) {
+        val resolved = try {
+            client.resolveLost(turnId)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            false
+        }
+        if (!resolved) return
+        synchronized(lock) {
+            val running = active ?: return
+            if (running.job === me) running.unresolved = null
+        }
+    }
+
+    private suspend fun awaitGatewayIfLost(me: Job, outcome: TurnOutcome) {
+        if (outcome !is TurnOutcome.Broken && outcome != TurnOutcome.NoGateway) return
+        synchronized(lock) {
+            val running = active ?: return
+            if (running.job !== me) return
+            running.lost = true
+        }
+        withTimeoutOrNull(gatewayWaitMs) { gateway.first { it !is GatewayState.Running } }
     }
 
     private fun fold(me: Job, event: ChatEvent) {
@@ -240,14 +282,18 @@ class ChatController(
             if (running.job !== me) return
             active = null
             val (interrupted, reason) = if (running.stopped || outcome == null) true to null else ending(outcome, gateway.value is GatewayState.Running)
+            val clears = !running.lost && (running.stopped || outcome == null || outcome is TurnOutcome.Finished)
+            val pending = running.unresolved ?: running.conversation.pendingTurn.takeUnless { clears }
             val text = running.turn.text.trim()
             val tools = running.turn.tools.map { it.label }
-            val conversation = if (text.isEmpty() && tools.isEmpty()) {
+            val reply = if (text.isEmpty() && tools.isEmpty()) emptyList() else listOf(ChatMessage(false, text, tools, interrupted))
+            val conversation = if (reply.isEmpty() && pending == running.conversation.pendingTurn) {
                 running.conversation
             } else {
                 running.conversation.copy(
                     updatedAt = clock(),
-                    messages = running.conversation.messages + ChatMessage(false, text, tools, interrupted),
+                    messages = running.conversation.messages + reply,
+                    pendingTurn = pending,
                 ).also { save(it) }
             }
             if (opened?.id == conversation.id) {

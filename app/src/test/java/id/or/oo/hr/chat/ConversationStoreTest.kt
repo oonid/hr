@@ -1,6 +1,7 @@
 package id.or.oo.hr.chat
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
@@ -99,6 +100,34 @@ class ConversationStoreTest {
 
         bodies.keys.forEach { assertNull(it, store.load(it)) }
         assertEquals(listOf("good"), store.list().map { it.id })
+    }
+
+    @Test
+    fun pendingTurnRoundTrips() {
+        val pending = conversation("p").copy(pendingTurn = "0f6c3a52-7d1e-4b8a-9c3f-2e5d6a7b8c9d")
+        store.save(pending)
+
+        assertEquals(pending, store.load("p"))
+        assertEquals("0f6c3a52-7d1e-4b8a-9c3f-2e5d6a7b8c9d", store.list().single().pendingTurn)
+
+        store.save(pending.copy(pendingTurn = null))
+
+        assertNull(store.load("p")!!.pendingTurn)
+        assertFalse(File(dir, "p.json").readText().contains("pendingTurn"))
+    }
+
+    @Test
+    fun aNonStringPendingTurnIsMalformed() {
+        dir.mkdirs()
+        val head = """{"id":"ID","sessionId":"s","title":"t","updatedAt":1,"messages":[]"""
+        File(dir, "n.json").writeText(head.replace("ID", "n") + ""","pendingTurn":5}""")
+        File(dir, "o.json").writeText(head.replace("ID", "o") + ""","pendingTurn":{"id":"x"}}""")
+        File(dir, "z.json").writeText(head.replace("ID", "z") + ""","pendingTurn":null}""")
+
+        assertNull(store.load("n"))
+        assertNull(store.load("o"))
+        assertNull(store.load("z")!!.pendingTurn)
+        assertEquals(listOf("z"), store.list().map { it.id })
     }
 
     @Test
