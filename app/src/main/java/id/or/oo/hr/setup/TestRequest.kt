@@ -1,6 +1,7 @@
 package id.or.oo.hr.setup
 
 import id.or.oo.hr.image.Http
+import id.or.oo.hr.redact
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
@@ -35,14 +36,11 @@ class TestRequest(
         } catch (e: IOException) {
             return TestResult.Failed(e.message ?: e.javaClass.simpleName)
         }
-        if (response.code >= 400) return TestResult.Rejected(response.code, redact(response.body).take(BODY_LIMIT))
+        if (response.code >= 400) return TestResult.Rejected(response.code, redact(response.body, secrets()).take(BODY_LIMIT))
         val text = answer(response.body)
             ?: return TestResult.Failed("the gateway answered something hr cannot read")
         return TestResult.Answered(text.trim())
     }
-
-    private fun redact(body: String): String =
-        secrets().filter { it.isNotBlank() }.fold(body) { text, secret -> text.replace(secret, "[redacted]") }
 
     private fun answer(body: String): String? = try {
         JSONObject(body).getJSONArray("choices").getJSONObject(0).getJSONObject("message").opt("content") as? String
