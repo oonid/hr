@@ -110,16 +110,16 @@ class ChatController(
         }
     }
 
-    fun send(text: String) {
+    fun send(text: String): Boolean {
         val message = text.trim()
-        if (message.isEmpty()) return
+        if (message.isEmpty()) return false
         synchronized(lock) {
-            val current = opened ?: return
-            if (active != null) return
+            val current = opened ?: return false
+            if (active != null) return false
             if (gateway.value !is GatewayState.Running) {
                 error = NOT_RUNNING
                 publish()
-                return
+                return false
             }
             val conversation = current.copy(
                 title = if (current.messages.isEmpty()) titleFor(message) else current.title,
@@ -136,6 +136,7 @@ class ChatController(
             next.invokeOnCompletion { finish(next, null) }
             next.start()
         }
+        return true
     }
 
     fun stop() {
