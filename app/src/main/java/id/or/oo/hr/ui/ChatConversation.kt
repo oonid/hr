@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -43,9 +44,9 @@ fun ChatConversation(app: HrApp, actions: HrActions, view: ChatView, modifier: M
     val count = messages.size + if (turn != null) 1 else 0
     val streamed = (turn?.text?.length ?: 0) + (turn?.tools?.size ?: 0)
     LaunchedEffect(count, streamed) {
-        if (count > 0) list.scrollToItem(count - 1)
+        if (count > 0) list.scrollToItem(count - 1, Int.MAX_VALUE)
     }
-    Column(modifier = modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(modifier = modifier.fillMaxSize().imePadding().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         LazyColumn(
             state = list,
             modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -55,11 +56,8 @@ fun ChatConversation(app: HrApp, actions: HrActions, view: ChatView, modifier: M
             if (turn != null) item { Running(turn, app) }
         }
         view.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-        if (gateway !is GatewayState.Running) {
-            GatewayBanner(gateway, actions)
-        } else {
-            Input(app, view)
-        }
+        if (gateway !is GatewayState.Running) GatewayBanner(gateway, actions)
+        Input(app, view, gateway is GatewayState.Running)
     }
 }
 
@@ -125,7 +123,7 @@ private fun GatewayBanner(state: GatewayState, actions: HrActions) {
 }
 
 @Composable
-private fun Input(app: HrApp, view: ChatView) {
+private fun Input(app: HrApp, view: ChatView, running: Boolean) {
     var draft by rememberSaveable(view.conversation.id) { mutableStateOf("") }
     val busy = view.turn != null
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -134,7 +132,6 @@ private fun Input(app: HrApp, view: ChatView) {
             onValueChange = { draft = it },
             modifier = Modifier.fillMaxWidth(),
             maxLines = 5,
-            enabled = !busy,
         )
         if (view.busyElsewhere) Text("Hermes is answering in another chat.", style = MaterialTheme.typography.bodySmall)
         if (busy) {
@@ -142,10 +139,9 @@ private fun Input(app: HrApp, view: ChatView) {
         } else {
             Button(
                 onClick = {
-                    app.chat.send(draft)
-                    draft = ""
+                    if (app.chat.send(draft)) draft = ""
                 },
-                enabled = draft.isNotBlank() && !view.busyElsewhere,
+                enabled = running && draft.isNotBlank() && !view.busyElsewhere,
             ) { Text("Send") }
         }
     }
