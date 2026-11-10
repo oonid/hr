@@ -1131,4 +1131,19 @@ class ChatControllerTest {
         call.outcome.complete(TurnOutcome.Finished("stop"))
         ended(chat.id, 1)
     }
+
+    @Test
+    fun aTurnStoppedMidSecretSavesNoLongPrefixOfIt() {
+        known = listOf("hrsecret12345")
+        val chat = open()
+        controller.send("hi")
+        val call = nextCall()
+        call.onEvent(ChatEvent.Text("key is hrsecret12"))
+        assertEquals("key is ", controller.view.value!!.turn!!.text)
+        controller.stop()
+        val done = ended(chat.id, 2)
+        assertEquals(ChatMessage(false, "key is [redacted]", interrupted = true), done.conversation.messages[1])
+        assertEquals(done.conversation, persisted(done))
+        assertFalse(store.load(chat.id)!!.messages[1].text.contains("hrsecret"))
+    }
 }
