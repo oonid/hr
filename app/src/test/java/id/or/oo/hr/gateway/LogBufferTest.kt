@@ -384,6 +384,50 @@ class LogBufferTest {
         assertEquals(listOf("link"), log.snapshot())
     }
 
+    @Test
+    fun aRunStartingMidKeyIsRedacted() {
+        val long = randomKey(2_000)
+        val redacting = LogBuffer(secrets = { listOf(KEY, long) })
+        redacting.append("a " + KEY.substring(17, 29) + " b\n")
+        redacting.append("c " + long.substring(1_000, 1_030) + " d\n")
+        redacting.append("e " + KEY.substring(50) + "\n")
+        redacting.append("f " + long.substring(1_990))
+
+        assertEquals(listOf("a [redacted] b", "c [redacted] d", "e [redacted]", "f [redacted]"), redacting.snapshot())
+    }
+
+    @Test
+    fun aLongKeyDoesNotSlowScrubbing() {
+        val long = randomKey(2_000)
+        val redacting = LogBuffer(secrets = { listOf(long, KEY) })
+        var piece = 0
+        val text = buildString {
+            while (length < 50_000) {
+                append("INFO request ").append(piece).append(" auth ").append(long.substring(piece % 1_900, piece % 1_900 + 60))
+                append(" status ok ").append("q".repeat(200))
+                if (piece % 10 == 9) append('\n')
+                piece += 37
+            }
+        }.take(50_000)
+        val shown = mutableListOf<String>()
+        val start = System.nanoTime()
+        for (chunk in text.chunked(100)) {
+            redacting.append(chunk)
+            shown += redacting.tail(5)
+        }
+        val elapsed = (System.nanoTime() - start) / 1_000_000
+
+        assertTrue("took $elapsed ms", elapsed < 2_000)
+        val parts = (0..long.length - 8).map { long.substring(it, it + 8) }.toHashSet()
+        assertTrue(shown.none { line -> (0..line.length - 8).any { line.substring(it, it + 8) in parts } })
+    }
+
+    private fun randomKey(size: Int): String {
+        val random = java.util.Random(7)
+        val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+        return String(CharArray(size) { alphabet[random.nextInt(alphabet.length)] })
+    }
+
     private fun assertNoPartOfKey(label: String, lines: List<String>) {
         for (start in 0..KEY.length - 8) {
             val part = KEY.substring(start, start + 8)
