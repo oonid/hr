@@ -4,6 +4,8 @@ import id.or.oo.hr.Hermes
 import id.or.oo.hr.HrFiles
 import id.or.oo.hr.writePrivate
 import id.or.oo.pr.session.Bind
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.File
 import java.security.SecureRandom
 
@@ -13,6 +15,8 @@ class ProfileStore(private val files: HrFiles, private val random: SecureRandom 
     private var key: String? = null
     private var envStamp: Pair<Long, Long>? = null
     private var envSecrets: List<String> = emptyList()
+    private var authStamp: Pair<Long, Long>? = null
+    private var authSecrets: List<String> = emptyList()
 
     fun ensureProfile(): File {
         val dir = files.profileDir
@@ -33,7 +37,13 @@ class ProfileStore(private val files: HrFiles, private val random: SecureRandom 
             envStamp = stamp
             envSecrets = if (stamp == null) emptyList() else secretValues(env.readText())
         }
-        listOf(apiServerKey()) + envSecrets
+        val auth = File(files.profileDir, "auth.json")
+        val authNow = if (auth.isFile) auth.lastModified() to auth.length() else null
+        if (authNow != authStamp || authNow == null) {
+            authStamp = authNow
+            authSecrets = if (authNow == null) emptyList() else loginTokens(auth)
+        }
+        (listOf(apiServerKey()) + envSecrets + authSecrets).distinct()
     }
 
     fun writeRootEnv(rootfs: File) {
@@ -84,7 +94,29 @@ class ProfileStore(private val files: HrFiles, private val random: SecureRandom 
             value.takeIf { it.isNotEmpty() && SECRET_SUFFIXES.any { suffix -> name.endsWith(suffix) } }
         }
 
+    private fun loginTokens(auth: File): List<String> {
+        val found = linkedSetOf<String>()
+        try {
+            collectTokens(JSONObject(auth.readText()), found)
+        } catch (e: Exception) {
+            return emptyList()
+        }
+        return found.toList()
+    }
+
+    private fun collectTokens(node: Any?, into: MutableSet<String>) {
+        when (node) {
+            is JSONObject -> node.keys().forEach { name ->
+                val value = node.opt(name)
+                if (name in TOKEN_KEYS && value is String && value.isNotBlank()) into.add(value)
+                collectTokens(value, into)
+            }
+            is JSONArray -> for (i in 0 until node.length()) collectTokens(node.opt(i), into)
+        }
+    }
+
     private companion object {
+        val TOKEN_KEYS = setOf("access_token", "refresh_token", "agent_key", "api_key")
         val KEY_FORMAT = Regex("[0-9a-f]{64}")
         val SECRET_SUFFIXES = listOf("_KEY", "_TOKEN", "_PASSWORD", "_SECRET")
     }
