@@ -3,6 +3,7 @@ package id.or.oo.hr
 import android.app.Application
 import android.content.Intent
 import android.net.ConnectivityManager
+import android.os.StatFs
 import id.or.oo.hr.chat.ChatClient
 import id.or.oo.hr.chat.ChatController
 import id.or.oo.hr.chat.ConversationStore
@@ -10,6 +11,7 @@ import id.or.oo.hr.gateway.GatewayController
 import id.or.oo.hr.gateway.GatewayLaunch
 import id.or.oo.hr.gateway.LocalGatewayProbe
 import id.or.oo.hr.gateway.LogBuffer
+import id.or.oo.hr.gateway.active
 import id.or.oo.hr.image.GhcrRegistry
 import id.or.oo.hr.image.ImageStore
 import id.or.oo.hr.image.imageInUse
@@ -19,6 +21,7 @@ import id.or.oo.hr.profile.ProfileStore
 import id.or.oo.hr.profile.readStatus
 import id.or.oo.hr.setup.CodexLogin
 import id.or.oo.hr.setup.ControllerRestart
+import id.or.oo.hr.setup.GatewayRestart
 import id.or.oo.hr.setup.HermesCommand
 import id.or.oo.hr.setup.ModelCatalog
 import id.or.oo.hr.setup.ProfileSettings
@@ -93,6 +96,11 @@ class HrApp : Application(), ProotHost, SessionHost {
             files,
             imageScope,
             inUse = { imageInUse(sessions.running.value.isNotEmpty(), gateway.state.value) },
+            restart = GatewayRestart { ControllerRestart(gateway.state, gateway::stop, gateway::start).restart() },
+            gatewayActive = { gateway.state.value.active },
+            stopGateway = { gateway.stop() },
+            sessionsBlocking = { sessions.running.value.any { it != Hermes.GATEWAY_KEY } || sessions.tasks.value.isNotEmpty() },
+            freeBytes = { StatFs(filesDir.path).availableBytes },
         )
     }
 
@@ -183,7 +191,7 @@ class HrApp : Application(), ProotHost, SessionHost {
     }
 
     private fun prepareGateway(): SessionManager.SessionFactory {
-        check(!images.busy) { "wait for the image operation to finish" }
+        check(images.canLaunch) { "wait for the image operation to finish" }
         val alias = checkNotNull(images.currentAlias()) { "install the Hermes image first" }
         profiles.writeRootEnv(files.rootfs(alias))
         return CommandSessionFactory(
