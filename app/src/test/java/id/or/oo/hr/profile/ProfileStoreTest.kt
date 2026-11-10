@@ -151,6 +151,60 @@ class ProfileStoreTest {
         assertEquals(listOf(store.apiServerKey()), store.secrets())
     }
 
+    private fun authFile(): File = File(files.profileDir, "auth.json").also { files.profileDir.mkdirs() }
+
+    @Test
+    fun loginTokensAreSecrets() {
+        authFile().writeText(
+            """{"providers":{"openai-codex":{"tokens":{"access_token":"access-dummy-1","expires_at":1893456000,"id":"id-dummy-1"}}},
+            "credential_pool":{"openai-codex":[{"id":"id-dummy-2","refresh_token":"refresh-dummy-1","agent_key":"agent-dummy-1","api_key":"apikey-dummy-1","label":"main"}]}}""",
+        )
+
+        val secrets = store.secrets()
+
+        assertTrue(secrets.containsAll(listOf("access-dummy-1", "refresh-dummy-1", "agent-dummy-1", "apikey-dummy-1")))
+        assertFalse(secrets.contains("id-dummy-1"))
+        assertFalse(secrets.contains("id-dummy-2"))
+        assertFalse(secrets.contains("main"))
+        assertEquals(secrets.distinct(), secrets)
+    }
+
+    @Test
+    fun aRewrittenAuthFileIsPickedUp() {
+        authFile().writeText("""{"access_token":"first-token-1"}""")
+        assertTrue(store.secrets().contains("first-token-1"))
+
+        authFile().writeText("""{"access_token":"second-token-longer"}""")
+
+        val secrets = store.secrets()
+        assertTrue(secrets.contains("second-token-longer"))
+        assertFalse(secrets.contains("first-token-1"))
+    }
+
+    @Test
+    fun aRemovedAuthFileStopsContributing() {
+        authFile().writeText("""{"access_token":"first-token-1"}""")
+        assertTrue(store.secrets().contains("first-token-1"))
+
+        authFile().delete()
+
+        assertEquals(listOf(store.apiServerKey()), store.secrets())
+    }
+
+    @Test
+    fun aCorruptAuthFileAddsNothing() {
+        authFile().writeText("{not json")
+
+        assertEquals(listOf(store.apiServerKey()), store.secrets())
+    }
+
+    @Test
+    fun blankAndNonStringTokensAreIgnored() {
+        authFile().writeText("""{"access_token":"  ","refresh_token":12345678,"api_key":null,"agent_key":""}""")
+
+        assertEquals(listOf(store.apiServerKey()), store.secrets())
+    }
+
     @Test
     fun secretsPickUpARewriteOfTheEnvFile() {
         store.writeProfileEnv(mapOf("TELEGRAM_BOT_TOKEN" to "first"))
