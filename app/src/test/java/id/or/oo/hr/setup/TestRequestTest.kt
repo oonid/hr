@@ -115,6 +115,30 @@ class TestRequestTest {
     }
 
     @Test
+    fun anAnswerIsRedacted() {
+        reply = response(200, """{"choices": [{"message": {"role": "assistant", "content": " ok sk-one-key, tok-two-k… \n"}}]}""")
+
+        val result = TestRequest(UrlHttp(), { "sk-one-key" }, url, { listOf("sk-one-key", "tok-two-key") }).send()
+
+        assertEquals(TestResult.Answered("ok [redacted], [redacted]…"), result)
+    }
+
+    @Test
+    fun anAbbreviatedKeyInARejectionOrAnErrorIsRedacted() {
+        reply = response(401, "invalid api key: sk-one-k…")
+
+        val rejected = TestRequest(UrlHttp(), { "sk-one-key" }, url).send()
+
+        assertEquals(TestResult.Rejected(401, "invalid api key: [redacted]…"), rejected)
+        val http = object : id.or.oo.hr.image.Http {
+            override fun get(url: String, headers: Map<String, String>) = error("unused")
+            override fun post(url: String, headers: Map<String, String>, body: String): HttpResponse =
+                throw IOException("stream broke for sk-one-k…")
+        }
+        assertEquals(TestResult.Failed("stream broke for [redacted]…"), TestRequest(http, { "sk-one-key" }, url).send())
+    }
+
+    @Test
     fun aTimeoutIsFailed() {
         val http = object : id.or.oo.hr.image.Http {
             override fun get(url: String, headers: Map<String, String>) = error("unused")

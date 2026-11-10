@@ -273,7 +273,7 @@ class ChatController(
                     running.raw += event.delta
                     turn.copy(text = redactPrefixes(running.raw, known), approval = null, answering = false)
                 }
-                is ChatEvent.Tool -> turn.copy(tools = toolLines(turn.tools, event), approval = null, answering = false)
+                is ChatEvent.Tool -> turn.copy(tools = toolLines(turn.tools, event, known), approval = null, answering = false)
                 is ChatEvent.Approval -> turn.copy(approval = event, answering = false)
                 else -> return
             }
@@ -281,11 +281,12 @@ class ChatController(
         }
     }
 
-    private fun toolLines(lines: List<ToolLine>, event: ChatEvent.Tool): List<ToolLine> {
+    private fun toolLines(lines: List<ToolLine>, event: ChatEvent.Tool, known: List<String>): List<ToolLine> {
         val at = lines.indexOfFirst { it.callId == event.callId }
+        val label = redactPrefixes(event.label, known)
         return when {
-            event.running && at < 0 -> lines + ToolLine(event.callId, event.label, true)
-            event.running -> lines.toMutableList().also { it[at] = ToolLine(event.callId, event.label, true) }
+            event.running && at < 0 -> lines + ToolLine(event.callId, label, true)
+            event.running -> lines.toMutableList().also { it[at] = ToolLine(event.callId, label, true) }
             at < 0 -> lines
             else -> lines.toMutableList().also { it[at] = it[at].copy(running = false) }
         }
@@ -301,7 +302,7 @@ class ChatController(
             val clears = !running.failed && (running.stopped || outcome == null || outcome is TurnOutcome.Finished)
             val pending = (running.unresolved + listOfNotNull(running.turnId.takeUnless { clears })).takeLast(MAX_PENDING)
             val text = redactPrefixes(running.raw, known).trim()
-            val tools = running.turn.tools.map { it.label }
+            val tools = running.turn.tools.map { redactPrefixes(it.label, known) }
             val reply = if (text.isEmpty() && tools.isEmpty()) emptyList() else listOf(ChatMessage(false, text, tools, interrupted))
             val conversation = if (reply.isEmpty() && pending == running.conversation.pendingTurns) {
                 running.conversation

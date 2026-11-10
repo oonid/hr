@@ -1,7 +1,7 @@
 package id.or.oo.hr.setup
 
+import id.or.oo.hr.chat.redactPrefixes
 import id.or.oo.hr.image.Http
-import id.or.oo.hr.redact
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
@@ -37,12 +37,12 @@ class TestRequest(
         } catch (e: SocketTimeoutException) {
             return TestResult.Failed(TIMEOUT)
         } catch (e: IOException) {
-            return TestResult.Failed(e.message?.let { redact(it, secrets()) } ?: e.javaClass.simpleName)
+            return TestResult.Failed(e.message?.let { redactPrefixes(it, secrets()) } ?: e.javaClass.simpleName)
         }
-        if (response.code >= 400) return TestResult.Rejected(response.code, redact(response.body, secrets()).take(BODY_LIMIT))
+        if (response.code >= 400) return TestResult.Rejected(response.code, redactPrefixes(response.body, secrets()).take(BODY_LIMIT))
         val text = answer(response.body)
             ?: return TestResult.Failed("the gateway answered something hr cannot read")
-        return TestResult.Answered(text.trim())
+        return TestResult.Answered(redactPrefixes(text.trim(), secrets()))
     }
 
     private fun answer(body: String): String? = try {
