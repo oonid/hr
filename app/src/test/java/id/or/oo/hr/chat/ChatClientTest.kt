@@ -171,6 +171,49 @@ class ChatClientTest {
     }
 
     @Test
+    fun anAbbreviatedKeyInAToolLabelIsRedacted() {
+        server.stream = { x ->
+            x.eventStreamHead()
+            val running = JSONObject().put("toolCallId", "c1").put("status", "running").put("label", "💻 echo hrsecret12…")
+            x.write("event: hermes.tool.progress\ndata: $running\n\n")
+            x.write(finish())
+        }
+        send(client(secrets = listOf("hrsecret12345")))
+        assertEquals(ChatEvent.Tool("c1", "💻 echo [redacted]…", true), events.first())
+    }
+
+    @Test
+    fun anAbbreviatedKeyInAnApprovalIsRedacted() {
+        server.stream = { x ->
+            x.eventStreamHead()
+            val ask = JSONObject().put("run_id", "r1").put("command", "echo hrsecret12…").put("description", "prints hrsecret1… to the log")
+            x.write("event: approval.request\ndata: $ask\n\n")
+            x.write(finish())
+        }
+        send(client(secrets = listOf("hrsecret12345")))
+        val approval = events.first() as ChatEvent.Approval
+        assertEquals("echo [redacted]…", approval.command)
+        assertEquals("prints [redacted]… to the log", approval.description)
+    }
+
+    @Test
+    fun anAbbreviatedKeyInARejectionOrALostConnectionIsRedacted() {
+        TestHttpServer { _, _ -> response(401, """{"error": "bad key hrsecret12…"}""") }.use {
+            val c = ChatClient({ "hrsecret12345" }, { listOf("hrsecret12345") }, "http://127.0.0.1:${it.port}/p/android/v1", 2_000, 2_000)
+            val outcome = runBlocking { c.send("s", "turn-1", "hi") { } }
+            assertEquals(TurnOutcome.Rejected(401, """{"error": "bad key [redacted]…"}"""), outcome)
+        }
+        server.stream = { x ->
+            x.eventStreamHead()
+            x.write(chunk("part"))
+            x.write(finish())
+        }
+        val thrown = IOException("reset while sending hrsecret1…")
+        val outcome = runBlocking { client(secrets = listOf("hrsecret12345")).send("s", "t1", "hi") { if (it is ChatEvent.Text) throw thrown } }
+        assertEquals(TurnOutcome.Broken("reset while sending [redacted]…", lost = true), outcome)
+    }
+
+    @Test
     fun theLastFinishFrameWins() {
         server.stream = { x ->
             x.eventStreamHead()

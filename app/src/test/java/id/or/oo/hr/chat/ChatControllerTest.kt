@@ -1136,6 +1136,51 @@ class ChatControllerTest {
     }
 
     @Test
+    fun aKeyInAToolLabelIsNeverShownOrSaved() {
+        known = listOf("hrsecret12345")
+        val chat = open()
+        controller.send("hi")
+        val call = nextCall()
+        val shown = mutableListOf<ToolLine>()
+        call.onEvent(ChatEvent.Tool("c1", "💻 echo hrsecret12…", true))
+        shown += controller.view.value!!.turn!!.tools
+        call.onEvent(ChatEvent.Tool("c2", "💻 cat token-file", true))
+        known = listOf("hrsecret12345", "fresh-token-value")
+        call.onEvent(ChatEvent.Tool("c3", "💻 echo fresh-token-v…", true))
+        shown += controller.view.value!!.turn!!.tools
+        call.onEvent(ChatEvent.Tool("c2", "💻 cat token-file fresh-token-value", true))
+        call.onEvent(ChatEvent.Tool("c1", "", false))
+        val tools = controller.view.value!!.turn!!.tools
+        shown += tools
+        assertTrue(shown.none { "hrsecret" in it.label || "fresh-to" in it.label })
+        assertEquals(
+            listOf(
+                ToolLine("c1", "💻 echo [redacted]…", false),
+                ToolLine("c2", "💻 cat token-file [redacted]", true),
+                ToolLine("c3", "💻 echo [redacted]…", true),
+            ),
+            tools,
+        )
+        call.outcome.complete(TurnOutcome.Finished("stop"))
+        val done = ended(chat.id, 2)
+        val labels = listOf("💻 echo [redacted]…", "💻 cat token-file [redacted]", "💻 echo [redacted]…")
+        assertEquals(labels, done.conversation.messages[1].tools)
+        assertEquals(labels, persisted(done)!!.messages[1].tools)
+    }
+
+    @Test
+    fun aToolLabelIsSavedWithTheSecretsKnownAtTheEnd() {
+        val chat = open()
+        controller.send("hi")
+        val call = nextCall()
+        call.onEvent(ChatEvent.Tool("c1", "💻 echo late-secret-value", true))
+        known = listOf("late-secret-value")
+        call.outcome.complete(TurnOutcome.Finished("stop"))
+        val done = ended(chat.id, 2)
+        assertEquals(listOf("💻 echo [redacted]"), persisted(done)!!.messages[1].tools)
+    }
+
+    @Test
     fun aLongSecretStreamedOneCharacterAtATimeStaysFast() {
         val random = java.util.Random(7)
         val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"

@@ -1,7 +1,6 @@
 package id.or.oo.hr.chat
 
 import id.or.oo.hr.Hermes
-import id.or.oo.hr.redact
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -108,7 +107,7 @@ class ChatClient(
         abandonIfCancelled(connection, active)
         if (code >= 400) {
             val body = connection.errorStream?.use { it.readBytes().toString(Charsets.UTF_8) } ?: ""
-            return TurnOutcome.Rejected(code, redact(body, secrets()).take(BODY_LIMIT))
+            return TurnOutcome.Rejected(code, redactPrefixes(body, secrets()).take(BODY_LIMIT))
         }
         BufferedReader(InputStreamReader(connection.inputStream, Charsets.UTF_8)).use { reader ->
             readSse(generateSequence { reader.readLine() }.iterator()) { frame ->
@@ -119,8 +118,8 @@ class ChatClient(
     }
 
     private fun redacted(event: ChatEvent, secrets: List<String>): ChatEvent = when (event) {
-        is ChatEvent.Tool -> event.copy(label = redact(event.label, secrets))
-        is ChatEvent.Approval -> event.copy(command = redact(event.command, secrets), description = redact(event.description, secrets))
+        is ChatEvent.Tool -> event.copy(label = redactPrefixes(event.label, secrets))
+        is ChatEvent.Approval -> event.copy(command = redactPrefixes(event.command, secrets), description = redactPrefixes(event.description, secrets))
         else -> event
     }
 
@@ -133,7 +132,7 @@ class ChatClient(
     private fun brokenReason(e: IOException): String {
         if (e is SocketTimeoutException) return TIMEOUT
         val message = e.message
-        return if (message.isNullOrBlank()) LOST else redact(message, secrets())
+        return if (message.isNullOrBlank()) LOST else redactPrefixes(message, secrets())
     }
 
     override suspend fun answer(runId: String, requestId: String?, choice: String): Boolean =
