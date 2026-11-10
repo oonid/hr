@@ -59,6 +59,11 @@ class MainActivity : ComponentActivity() {
         setContent { HrTheme { HrScreens(app, actions) } }
     }
 
+    override fun onStart() {
+        super.onStart()
+        app.updates.check(force = false)
+    }
+
     override fun onResume() {
         super.onResume()
         if (!app.images.busy) lifecycleScope.launch(Dispatchers.IO) { app.images.refresh() }
