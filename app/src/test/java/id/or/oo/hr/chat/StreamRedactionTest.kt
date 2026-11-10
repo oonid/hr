@@ -9,64 +9,47 @@ class StreamRedactionTest {
 
     @Test
     fun noSecretsLeavesTextAlone() {
-        assertEquals("key is hrsec", displayText("key is hrsec", emptyList()))
-        assertEquals("key is hrsec", finalText("key is hrsec", emptyList()))
-        assertEquals("", displayText("", listOf(secret)))
+        assertEquals("key is hrsecret12345", redactPrefixes("key is hrsecret12345", emptyList()))
+        assertEquals("", redactPrefixes("", listOf(secret)))
     }
 
     @Test
     fun aCompleteSecretIsRedacted() {
-        assertEquals("key is [redacted] done", displayText("key is hrsecret12345 done", listOf(secret)))
-        assertEquals("key is [redacted]", displayText("key is hrsecret12345", listOf(secret)))
-        assertEquals("key is [redacted] done", finalText("key is hrsecret12345 done", listOf(secret)))
+        assertEquals("key is [redacted] done", redactPrefixes("key is hrsecret12345 done", listOf(secret)))
+        assertEquals("[redacted]", redactPrefixes("hrsecret12345", listOf(secret)))
+        assertEquals("a [redacted] b [redacted]", redactPrefixes("a hrsecret12345 b hrsecret12345", listOf(secret, secret)))
     }
 
     @Test
-    fun aTrailingPrefixIsHeldBack() {
-        assertEquals("key is ", displayText("key is h", listOf(secret)))
-        assertEquals("key is ", displayText("key is hrsecret", listOf(secret)))
-        assertEquals("key is ", displayText("key is hrsecret1234", listOf(secret)))
-        assertEquals("", displayText("hrsec", listOf(secret)))
-        assertEquals("key is hrsec", finalText("key is hrsec", listOf(secret)))
-        assertEquals("key is hrsection", displayText("key is hrsection", listOf(secret)))
+    fun anAbbreviatedSecretMidTextIsRedacted() {
+        assertEquals("key [redacted]… ok", redactPrefixes("key hrsecret12… ok", listOf(secret)))
+        assertEquals("key is [redacted]", redactPrefixes("key is hrsecret", listOf(secret)))
+        assertEquals("[redacted]6 x", redactPrefixes("hrsecret123456 x", listOf(secret)))
     }
 
     @Test
-    fun aTrailingPrefixShorterThanTheMinimumIsNotHeld() {
-        assertEquals("say short1", displayText("say short1", listOf("short12")))
-        assertEquals("say short12", displayText("say short12", listOf("short12")))
-        assertEquals("blank ", displayText("blank ", listOf("          ")))
+    fun aSevenCharacterPrefixIsLeftAlone() {
+        assertEquals("key is hrsecre", redactPrefixes("key is hrsecre", listOf(secret)))
+        assertEquals("hrsecre ok hrsection", redactPrefixes("hrsecre ok hrsection", listOf(secret)))
     }
 
     @Test
-    fun twoSecretsOverlappingPrefixes() {
+    fun aSecretShorterThanTheMinimumIsIgnored() {
+        assertEquals("say short12", redactPrefixes("say short12", listOf("short12")))
+        assertEquals("blank          ", redactPrefixes("blank          ", listOf("          ")))
+    }
+
+    @Test
+    fun twoSecretsSharingAPrefix() {
         val secrets = listOf(secret, "hrsecond9999")
-        assertEquals("x ", displayText("x hrsec", secrets))
-        assertEquals("x ", displayText("x hrseco", secrets))
-        assertEquals("x ", displayText("x hrsecr", secrets))
-        assertEquals("x [redacted] y ", displayText("x hrsecond9999 y hrsecre", secrets))
-        assertEquals("x hrsecz", displayText("x hrsecz", secrets))
+        assertEquals("x [redacted] y [redacted] z", redactPrefixes("x hrsecond9 y hrsecret1 z", secrets))
+        assertEquals("x hrseco", redactPrefixes("x hrseco", secrets))
     }
 
     @Test
-    fun aRedactedSecretIsNotCutOpenByAnotherSecretsPrefix() {
-        val secrets = listOf("abcdefgh", "fghijklm")
-        assertEquals("is [redacted]", displayText("is abcdefgh", secrets))
-        assertEquals("is [redacted] ", displayText("is abcdefgh fgh", secrets))
-    }
-
-    @Test
-    fun aLongHeldPrefixAtTheEndIsRedacted() {
-        val long = "abcdefghij0123456789"
-        assertEquals("it is [redacted]", finalText("it is abcdefghij", listOf(long)))
-        assertEquals("it is [redacted]", finalText("it is abcdefgh", listOf(long)))
-        assertEquals("[redacted] and [redacted]", finalText("abcdefghij0123456789 and abcdefghij012", listOf(long)))
-    }
-
-    @Test
-    fun aShortHeldPrefixAtTheEndIsKept() {
-        val long = "abcdefghij0123456789"
-        assertEquals("it is abcde", finalText("it is abcde", listOf(long)))
-        assertEquals("it is abcdefg", finalText("it is abcdefg", listOf(long)))
+    fun overlappingSecretsAreRedactedAsOneRun() {
+        assertEquals("[redacted]", redactPrefixes("abcdefghijklmnopqrst", listOf("abcdefghij", "ijklmnopqrst")))
+        assertEquals("is [redacted]!", redactPrefixes("is abcdefghijklm!", listOf("abcdefgh", "fghijklm")))
+        assertEquals("[redacted]", redactPrefixes("abcdefghijklmnop", listOf("abcdefgh", "ijklmnop")))
     }
 }
