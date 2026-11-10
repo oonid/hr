@@ -68,7 +68,12 @@ class TerminalActivity : ComponentActivity() {
                 if (current == null || current.exit.value != null) finish() else showLeavePrompt.value = true
             }
         })
-        when (terminalStart(restored = savedInstanceState != null, sessionOpen = sessions.isOpen(Hermes.TERMINAL_KEY))) {
+        val alias = (application as HrApp).images.currentAlias()
+        if (alias == null) {
+            setContent { Message("Install the Hermes image first.") }
+            return
+        }
+        when (terminalStart(restored = savedInstanceState != null, sessionOpen = sessions.isOpen(alias))) {
             TerminalStart.SHOW_ENDED -> showEndedWhileStopped()
             TerminalStart.OPEN -> open()
         }
@@ -93,8 +98,14 @@ class TerminalActivity : ComponentActivity() {
     }
 
     private fun open() {
-        (application as HrApp).profiles.ensureProfile()
-        when (val result = sessions.open(Hermes.TERMINAL_KEY)) {
+        val app = application as HrApp
+        val alias = app.images.currentAlias()
+        if (alias == null) {
+            setContent { Message("Install the Hermes image first.") }
+            return
+        }
+        app.profiles.ensureProfile()
+        when (val result = sessions.open(alias)) {
             is SessionManager.OpenResult.Failed -> setContent { Message("Couldn't open the terminal: ${result.reason}") }
             is SessionManager.OpenResult.Ending -> {
                 sessions.attach(result.session, screen)

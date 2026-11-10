@@ -2,7 +2,6 @@ package id.or.oo.hr
 
 object Hermes {
     const val CONTAINER = "hermes"
-    const val TERMINAL_KEY = "hermes"
     const val GATEWAY_KEY = "hermes-gateway"
     const val REPOSITORY = "ghcr.io/oonid/hermes-agent"
     const val PULL_TAG = "gateway"

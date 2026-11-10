@@ -3,6 +3,7 @@ package id.or.oo.hr.setup
 import id.or.oo.pr.session.Bind
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class HermesCommandTest {
@@ -22,6 +23,22 @@ class HermesCommandTest {
             ),
             seen.single(),
         )
+    }
+
+    @Test
+    fun hermesCommandLogsIntoTheCurrentAlias() {
+        val seen = mutableListOf<List<String>>()
+        val cmd = HermesCommand({ args, _ -> seen += args; 0 }, profile) { "hermes-v1" }
+        runBlocking { cmd.run("x") {} }
+        assertEquals(listOf("login", "hermes-v1", "--user", "root"), seen.single().take(4))
+    }
+
+    @Test
+    fun withoutAnAliasItRefusesToRun() {
+        val cmd = HermesCommand({ _, _ -> 0 }, profile) { null }
+        val failure = runCatching { runBlocking { cmd.run("x") {} } }.exceptionOrNull()
+        assertTrue(failure is IllegalStateException)
+        assertEquals("install the Hermes image first", failure?.message)
     }
 
     @Test

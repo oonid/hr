@@ -15,7 +15,7 @@ import java.io.StringReader
 import java.io.StringWriter
 import java.util.Properties
 
-data class InstalledImage(val reference: String, val buildTag: String, val version: String, val installedAt: Long)
+data class InstalledImage(val reference: String, val buildTag: String, val version: String, val installedAt: Long, val alias: String)
 
 class ImageStore(
     private val command: DistroCommand,
@@ -39,6 +39,8 @@ class ImageStore(
 
     private val _containerPresent = MutableStateFlow(containerOnDisk())
     val containerPresent: StateFlow<Boolean> = _containerPresent
+
+    fun currentAlias(): String? = _installed.value?.alias
 
     val containerExists: Boolean
         get() = _containerPresent.value
@@ -71,7 +73,9 @@ class ImageStore(
         _containerPresent.value = containerOnDisk()
     }
 
-    private fun containerOnDisk(): Boolean = files.containerDir(Hermes.CONTAINER).exists()
+    private fun containerOnDisk(): Boolean = files.containerDir(recordedAlias()).exists()
+
+    private fun recordedAlias(): String = readRecord()?.getProperty(ALIAS) ?: Hermes.CONTAINER
 
     private fun start(kind: Kind, work: suspend () -> Boolean): Boolean {
         if (_operation.value?.running == true) return false
@@ -99,7 +103,7 @@ class ImageStore(
             append("pr-cli exited with $code.")
             return false
         }
-        val image = InstalledImage(reference, build.tag, build.version, clock())
+        val image = InstalledImage(reference, build.tag, build.version, clock(), Hermes.CONTAINER)
         save(image)
         _installed.value = image
         append("Installed ${build.tag}.")
@@ -107,8 +111,9 @@ class ImageStore(
     }
 
     private suspend fun removing(): Boolean {
-        append("Removing ${Hermes.CONTAINER}…")
-        val code = command.run(listOf("remove", Hermes.CONTAINER), ::append)
+        val alias = recordedAlias()
+        append("Removing $alias…")
+        val code = command.run(listOf("remove", alias), ::append)
         if (code != 0) {
             append("pr-cli exited with $code.")
             return false
@@ -124,14 +129,21 @@ class ImageStore(
     }
 
     private fun load(): InstalledImage? {
-        if (!files.imageRecord.isFile || !files.rootfs(Hermes.CONTAINER).isDirectory) return null
-        val properties = Properties().apply { load(StringReader(files.imageRecord.readText())) }
+        val properties = readRecord() ?: return null
+        val alias = properties.getProperty(ALIAS) ?: Hermes.CONTAINER
+        if (!files.rootfs(alias).isDirectory) return null
         return InstalledImage(
             reference = properties.getProperty(REFERENCE) ?: return null,
             buildTag = properties.getProperty(BUILD_TAG) ?: return null,
             version = properties.getProperty(VERSION) ?: return null,
             installedAt = properties.getProperty(INSTALLED_AT)?.toLongOrNull() ?: return null,
+            alias = alias,
         )
+    }
+
+    private fun readRecord(): Properties? {
+        if (!files.imageRecord.isFile) return null
+        return Properties().apply { load(StringReader(files.imageRecord.readText())) }
     }
 
     private fun save(image: InstalledImage) {
@@ -140,6 +152,7 @@ class ImageStore(
             setProperty(BUILD_TAG, image.buildTag)
             setProperty(VERSION, image.version)
             setProperty(INSTALLED_AT, image.installedAt.toString())
+            setProperty(ALIAS, image.alias)
         }
         val text = StringWriter().also { properties.store(it, null) }.toString()
         writePrivate(files.imageRecord, text)
@@ -152,5 +165,6 @@ class ImageStore(
         const val BUILD_TAG = "build_tag"
         const val VERSION = "version"
         const val INSTALLED_AT = "installed_at"
+        const val ALIAS = "alias"
     }
 }
