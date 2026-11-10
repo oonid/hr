@@ -1,9 +1,13 @@
 package id.or.oo.hr.image
 
+import id.or.oo.pr.session.eventually
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.assertEquals
 import org.junit.Test
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.atomic.AtomicInteger
 
 class UpdateCheckTest {
 
@@ -31,7 +35,23 @@ class UpdateCheckTest {
 
     private fun image(build: ImageBuild) = InstalledImage("ref", build.tag, build.version, 1L, "hermes")
 
-    private fun check() = UpdateCheck(registry, installed, store, kotlinx.coroutines.CoroutineScope(Dispatchers.Unconfined), { now }, Dispatchers.Unconfined)
+    private fun check() = UpdateCheck(
+        registry,
+        installed,
+        store,
+        CoroutineScope(Dispatchers.Unconfined),
+        { now },
+        Dispatchers.Unconfined,
+    )
+
+    private fun gated(gate: CountDownLatch, asked: AtomicInteger, answer: ImageBuild) = UpdateCheck(
+        { asked.incrementAndGet(); gate.await(); answer },
+        installed,
+        store,
+        CoroutineScope(Dispatchers.Unconfined),
+        { now },
+        Dispatchers.IO,
+    )
 
     @Test
     fun aDifferentBuildIsAvailable() {
@@ -127,5 +147,41 @@ class UpdateCheckTest {
         assertEquals(UpdateState.Unknown, check.state.value)
         installed.value = null
         assertEquals(UpdateState.Unknown, check.state.value)
+    }
+
+    @Test
+    fun aCheckTimeInTheFutureIsStale() {
+        store.lastCheckedAt = now + 3_600_000L
+        val check = check()
+        check.check(force = false)
+        assertEquals(1, calls)
+    }
+
+    @Test
+    fun aSecondCheckWhileCheckingIsIgnored() {
+        val gate = CountDownLatch(1)
+        val asked = AtomicInteger()
+        val check = gated(gate, asked, v2)
+        check.check(force = false)
+        eventually { asked.get() == 1 }
+        check.check(force = true)
+        assertEquals(UpdateState.Checking, check.state.value)
+        gate.countDown()
+        eventually { check.state.value is UpdateState.Available }
+        assertEquals(1, asked.get())
+    }
+
+    @Test
+    fun anInstallDuringACheckIsComparedWithTheNewBuild() {
+        val gate = CountDownLatch(1)
+        val asked = AtomicInteger()
+        val check = gated(gate, asked, v2)
+        check.check(force = false)
+        eventually { asked.get() == 1 }
+        installed.value = image(v2)
+        assertEquals(UpdateState.Checking, check.state.value)
+        gate.countDown()
+        eventually { check.state.value != UpdateState.Checking }
+        assertEquals(UpdateState.UpToDate(v2.tag), check.state.value)
     }
 }
