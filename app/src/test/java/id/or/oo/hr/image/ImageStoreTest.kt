@@ -66,7 +66,7 @@ class ImageStoreTest {
             listOf(listOf("install", "ghcr.io/oonid/hermes-agent:v0.22.3-pab570a0b-gateway", "--override-alias", "hermes")),
             calls,
         )
-        val installed = InstalledImage("ghcr.io/oonid/hermes-agent:v0.22.3-pab570a0b-gateway", build.tag, "v0.22.3", 1_700_000_000_000)
+        val installed = InstalledImage("ghcr.io/oonid/hermes-agent:v0.22.3-pab570a0b-gateway", build.tag, "v0.22.3", 1_700_000_000_000, "hermes")
         assertEquals(installed, store.installed.value)
         assertEquals(installed, store().installed.value)
         assertEquals(
@@ -79,6 +79,67 @@ class ImageStoreTest {
             store.operation.value!!.lines,
         )
         assertTrue(store.operation.value!!.succeeded)
+    }
+
+    private fun writeRecord(vararg extra: String) {
+        files.imageRecord.parentFile.mkdirs()
+        files.imageRecord.writeText(
+            (listOf("reference=ghcr.io/oonid/hermes-agent:v1", "build_tag=v1", "version=v0.22.3", "installed_at=1") + extra)
+                .joinToString("\n"),
+        )
+    }
+
+    @Test
+    fun aRecordWithoutAnAliasIsTheHermesContainer() {
+        writeRecord()
+        files.rootfs("hermes").mkdirs()
+
+        assertEquals("hermes", store().installed.value?.alias)
+        assertEquals("hermes", store().currentAlias())
+    }
+
+    @Test
+    fun aRecordedAliasIsUsed() {
+        writeRecord("alias=hermes-v1")
+        files.rootfs("hermes-v1").mkdirs()
+
+        val store = store()
+        assertEquals("hermes-v1", store.installed.value?.alias)
+        assertEquals("hermes-v1", store.currentAlias())
+        assertTrue(store.containerExists)
+    }
+
+    @Test
+    fun aRecordWhoseContainerIsMissingIsNotInstalled() {
+        writeRecord("alias=hermes-v1")
+        files.rootfs("hermes").mkdirs()
+
+        val store = store()
+        assertNull(store.installed.value)
+        assertNull(store.currentAlias())
+        assertFalse(store.containerExists)
+    }
+
+    @Test
+    fun installRecordsTheHermesAlias() {
+        val store = store()
+        store.install()
+        store.awaitIdle()
+
+        assertTrue(files.imageRecord.readText().contains("alias=hermes"))
+    }
+
+    @Test
+    fun removeRemovesTheRecordedAlias() {
+        writeRecord("alias=hermes-v1")
+        files.rootfs("hermes-v1").mkdirs()
+        val store = store()
+
+        store.remove()
+        store.awaitIdle()
+
+        assertEquals(listOf(listOf("remove", "hermes-v1")), calls)
+        assertNull(store.installed.value)
     }
 
     @Test

@@ -116,7 +116,7 @@ class HrApp : Application(), ProotHost, SessionHost {
         )
     }
 
-    private val hermesCommand: HermesCommand by lazy { HermesCommand(PrCliCommand(this), profiles.bind()) }
+    private val hermesCommand: HermesCommand by lazy { HermesCommand(PrCliCommand(this), profiles.bind()) { images.currentAlias() } }
 
     val setup: SetupController by lazy {
         val login = CodexLogin(
@@ -163,11 +163,11 @@ class HrApp : Application(), ProotHost, SessionHost {
 
     private fun prepareGateway(): SessionManager.SessionFactory {
         check(!images.busy) { "wait for the image operation to finish" }
-        check(images.installed.value != null) { "install the Hermes image first" }
-        profiles.writeRootEnv(files.rootfs(Hermes.CONTAINER))
+        val alias = checkNotNull(images.currentAlias()) { "install the Hermes image first" }
+        profiles.writeRootEnv(files.rootfs(alias))
         return CommandSessionFactory(
             this,
-            Hermes.CONTAINER,
+            alias,
             Hermes.GATEWAY_COMMAND,
             gatewayLog::append,
             listOf(profiles.bind()),

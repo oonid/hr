@@ -11,13 +11,16 @@ fun stripAnsi(line: String): String = ANSI_SEQUENCE.replace(line, "")
 class HermesCommand(
     private val command: DistroCommand,
     private val profile: Bind,
+    private val alias: () -> String? = { Hermes.CONTAINER },
 ) {
-    suspend fun run(script: String, onLine: (String) -> Unit): Int =
-        command.run(
+    suspend fun run(script: String, onLine: (String) -> Unit): Int {
+        val current = checkNotNull(alias()) { "install the Hermes image first" }
+        return command.run(
             listOf(
-                "login", Hermes.CONTAINER, "--user", "root",
+                "login", current, "--user", "root",
                 "--custom-bind", "${profile.hostPath}:${profile.guestPath}",
                 "--", script,
             ),
         ) { onLine(stripAnsi(it)) }
+    }
 }
