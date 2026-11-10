@@ -1,6 +1,7 @@
 package id.or.oo.hr.chat
 
 import id.or.oo.hr.gateway.GatewayState
+import id.or.oo.hr.redact
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
@@ -41,6 +42,7 @@ class ChatController(
     private val newId: () -> String = { UUID.randomUUID().toString() },
     io: CoroutineDispatcher = Dispatchers.IO,
     private val gatewayWaitMs: Long = 3_000,
+    private val secrets: () -> List<String> = { emptyList() },
 ) {
     private class Active(
         val job: Job,
@@ -50,13 +52,17 @@ class ChatController(
         var unresolved: List<String>,
         var stopped: Boolean = false,
         var failed: Boolean = false,
+        var raw: String = "",
     )
+
+    private class Shown(val from: Conversation, val secrets: List<String>, val copy: Conversation)
 
     private val lock = Any()
     private var active: Active? = null
     private var opened: Conversation? = null
     private var error: String? = null
     private var choice = 0L
+    private var shown: Shown? = null
     private val work = Channel<() -> Unit>(Channel.UNLIMITED)
     private val mutableConversations = MutableStateFlow<List<Conversation>>(emptyList())
     private val mutableView = MutableStateFlow<ChatView?>(null)
@@ -126,18 +132,19 @@ class ChatController(
     fun send(text: String): Boolean {
         val message = text.trim()
         if (message.isEmpty()) return false
+        val known = secrets()
         synchronized(lock) {
             val current = opened ?: return false
             if (active != null) return false
             if (gateway.value !is GatewayState.Running) {
                 error = NOT_RUNNING
-                publish()
+                publish(known)
                 return false
             }
             val turnId = newId()
             val previous = current.pendingTurns
             val conversation = current.copy(
-                title = if (current.messages.isEmpty()) titleFor(message) else current.title,
+                title = if (current.messages.isEmpty()) titleFor(redact(message, known)) else current.title,
                 updatedAt = clock(),
                 messages = current.messages + ChatMessage(true, message),
                 pendingTurns = (previous + turnId).takeLast(MAX_PENDING),
@@ -148,7 +155,7 @@ class ChatController(
                 runTurn(coroutineContext[Job]!!, conversation, turnId, previous, message)
             }
             active = Active(next, conversation, turnId, Turn("", emptyList(), null, false), previous)
-            publish()
+            publish(known)
             next.invokeOnCompletion { finish(next, null) }
             next.start()
         }
@@ -257,17 +264,21 @@ class ChatController(
     }
 
     private fun fold(me: Job, event: ChatEvent) {
+        val known = secrets()
         synchronized(lock) {
             val running = active ?: return
             if (running.job !== me) return
             val turn = running.turn
             running.turn = when (event) {
-                is ChatEvent.Text -> turn.copy(text = turn.text + event.delta, approval = null, answering = false)
+                is ChatEvent.Text -> {
+                    running.raw += event.delta
+                    turn.copy(text = displayText(running.raw, known), approval = null, answering = false)
+                }
                 is ChatEvent.Tool -> turn.copy(tools = toolLines(turn.tools, event), approval = null, answering = false)
                 is ChatEvent.Approval -> turn.copy(approval = event, answering = false)
                 else -> return
             }
-            publish()
+            publish(known)
         }
     }
 
@@ -282,6 +293,7 @@ class ChatController(
     }
 
     private fun finish(me: Job, outcome: TurnOutcome?) {
+        val known = secrets()
         synchronized(lock) {
             val running = active ?: return
             if (running.job !== me) return
@@ -289,7 +301,7 @@ class ChatController(
             val (interrupted, reason) = if (running.stopped || outcome == null) true to null else ending(outcome, gateway.value is GatewayState.Running)
             val clears = !running.failed && (running.stopped || outcome == null || outcome is TurnOutcome.Finished)
             val pending = (running.unresolved + listOfNotNull(running.turnId.takeUnless { clears })).takeLast(MAX_PENDING)
-            val text = running.turn.text.trim()
+            val text = finalText(running.raw, known).trim()
             val tools = running.turn.tools.map { it.label }
             val reply = if (text.isEmpty() && tools.isEmpty()) emptyList() else listOf(ChatMessage(false, text, tools, interrupted))
             val conversation = if (reply.isEmpty() && pending == running.conversation.pendingTurns) {
@@ -305,7 +317,7 @@ class ChatController(
                 opened = conversation
                 error = reason
             }
-            publish()
+            publish(known)
         }
     }
 
@@ -344,15 +356,27 @@ class ChatController(
     }
 
     private fun listNow() {
-        mutableConversations.value = store.list()
+        val known = secrets()
+        mutableConversations.value = store.list().map { it.copy(title = redact(it.title, known)) }
     }
 
-    private fun publish() {
-        val shown = opened
-        val running = active?.takeIf { it.conversation.id == shown?.id }
+    private fun publish(known: List<String> = secrets()) {
+        val current = opened
+        val running = active?.takeIf { it.conversation.id == current?.id }
         val elsewhere = active != null && running == null
         mutableRunningId.value = active?.conversation?.id
-        mutableView.value = shown?.let { ChatView(running?.conversation ?: it, running?.turn, error, elsewhere) }
+        mutableView.value = current?.let { ChatView(display(running?.conversation ?: it, known), running?.turn, error, elsewhere) }
+    }
+
+    private fun display(conversation: Conversation, known: List<String>): Conversation {
+        val last = shown
+        if (last != null && last.from === conversation && last.secrets == known) return last.copy
+        val copy = conversation.copy(
+            title = redact(conversation.title, known),
+            messages = conversation.messages.map { m -> m.copy(text = redact(m.text, known), tools = m.tools.map { redact(it, known) }) },
+        )
+        shown = Shown(conversation, known, copy)
+        return copy
     }
 
     private companion object {
