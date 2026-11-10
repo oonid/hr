@@ -1,6 +1,7 @@
 package id.or.oo.hr.image
 
 import id.or.oo.hr.HrFiles
+import id.or.oo.hr.setup.GatewayRestart
 import id.or.oo.pr.session.DistroCommand
 import id.or.oo.pr.session.eventually
 import kotlinx.coroutines.CompletableDeferred
@@ -18,6 +19,7 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicInteger
 
 class ImageStoreTest {
 
@@ -41,12 +43,52 @@ class ImageStoreTest {
                 onLine("Downloading OCI layer sha256:edab979e...")
                 if (exitCode == 0) files.rootfs(args[3]).mkdirs()
             }
-            "remove" -> if (exitCode == 0) files.containerDir(args[1]).deleteRecursively()
+            "remove" -> if (exitCode == 0) {
+                files.containerDir(args[1]).deleteRecursively()
+                marker(args[1]).delete()
+            }
         }
         exitCode
     }
 
-    private fun store() = ImageStore(command, { registry.resolve(it) }, files, scope, { inUse }, clock = { 1_700_000_000_000 })
+    private val restartResults = ArrayDeque<String?>()
+    private val events = CopyOnWriteArrayList<String>()
+    private val restarts = AtomicInteger()
+    private val stops = AtomicInteger()
+    private var onRestart: () -> Unit = {}
+    private var gatewayActive = true
+    private var sessionsBlocking = false
+    private var freeBytes = 10L * 1024 * 1024 * 1024
+
+    private val restart = GatewayRestart {
+        restarts.incrementAndGet()
+        events += "restart"
+        onRestart()
+        synchronized(restartResults) { restartResults.removeFirstOrNull() }
+    }
+
+    private fun store(
+        command: DistroCommand = this.command,
+        registry: ImageRegistry = ImageRegistry { this.registry.resolve(it) },
+        inUse: () -> Boolean = { this.inUse },
+    ) = ImageStore(
+        command,
+        registry,
+        files,
+        scope,
+        inUse,
+        restart,
+        gatewayActive = { gatewayActive },
+        stopGateway = {
+            stops.incrementAndGet()
+            events += "stop"
+        },
+        sessionsBlocking = { sessionsBlocking },
+        freeBytes = { freeBytes },
+        clock = { 1_700_000_000_000 },
+    )
+
+    private fun marker(alias: String) = File(files.containerDir(alias).parentFile, ".$alias.pr-cli-installing")
 
     private fun ImageStore.awaitIdle() = eventually { operation.value?.running == false }
 
@@ -249,7 +291,7 @@ class ImageStoreTest {
         val startRefused = java.util.concurrent.atomic.AtomicBoolean(false)
         lateinit var store: ImageStore
         var first = true
-        store = ImageStore(command, { registry.resolve(it) }, files, scope, {
+        store = store(inUse = {
             if (first) {
                 first = false
                 Thread {
@@ -259,7 +301,7 @@ class ImageStoreTest {
                 Thread.sleep(300)
             }
             false
-        }, clock = { 1_700_000_000_000 })
+        })
         store.install()
         store.awaitIdle()
         gate = CompletableDeferred()
@@ -320,18 +362,624 @@ class ImageStoreTest {
 
     @Test
     fun aCommandThatThrowsEndsTheOperationWithItsMessage() {
-        val store = ImageStore(
-            { _, _ -> throw IllegalStateException("no pr-cli") },
-            { build },
-            files,
-            scope,
-            { false },
-        )
+        val store = store(command = { _, _ -> throw IllegalStateException("no pr-cli") })
 
         store.install()
         store.awaitIdle()
 
         assertEquals("ERROR: no pr-cli", store.operation.value!!.lines.last())
         assertFalse(store.operation.value!!.succeeded)
+    }
+
+    private val v2 = ImageBuild("v2", "v0.23.0")
+    private val v3 = ImageBuild("v3", "v0.24.0")
+
+    private fun installedV1(vararg extra: String): ImageStore {
+        writeRecord(*extra)
+        files.rootfs("hermes").mkdirs()
+        return store()
+    }
+
+    private fun previousRecord(alias: String, tag: String) = arrayOf(
+        "previous.reference=ghcr.io/oonid/hermes-agent:$tag",
+        "previous.build_tag=$tag",
+        "previous.version=v0.22.0",
+        "previous.installed_at=2",
+        "previous.alias=$alias",
+    )
+
+    private fun ImageStore.lastLine() = operation.value!!.lines.last()
+
+    private fun resetCounts() {
+        calls.clear()
+        events.clear()
+        restarts.set(0)
+        stops.set(0)
+    }
+
+    @Test
+    fun anUpdateInstallsBesideAndSwitches() {
+        val store = installedV1()
+
+        assertTrue(store.update(v2))
+        store.awaitIdle()
+
+        assertEquals(listOf(listOf("install", "ghcr.io/oonid/hermes-agent:v2", "--override-alias", "hermes-v2")), calls)
+        val updated = InstalledImage("ghcr.io/oonid/hermes-agent:v2", "v2", "v0.23.0", 1_700_000_000_000, "hermes-v2")
+        val old = InstalledImage("ghcr.io/oonid/hermes-agent:v1", "v1", "v0.22.3", 1, "hermes")
+        assertEquals(updated, store.installed.value)
+        assertEquals(old, store.previous.value)
+        assertNull(store.interrupted.value)
+        assertEquals(updated, store().installed.value)
+        assertEquals(old, store().previous.value)
+        assertFalse(files.imageRecord.readText().contains("pending."))
+        assertEquals(1, restarts.get())
+        assertEquals(0, stops.get())
+        assertTrue(files.rootfs("hermes").isDirectory)
+        assertEquals(ImageStore.Kind.Update, store.operation.value!!.kind)
+        assertEquals("Updated to v2. The previous image (v1) is kept until you remove it.", store.lastLine())
+        assertTrue(store.operation.value!!.succeeded)
+    }
+
+    @Test
+    fun aFailedStartSwitchesBack() {
+        restartResults += listOf("port 8642 in use", null)
+        val store = installedV1()
+
+        store.update(v2)
+        store.awaitIdle()
+
+        assertEquals("hermes", store.installed.value?.alias)
+        assertEquals("hermes-v2", store.previous.value?.alias)
+        assertEquals("hermes", store().installed.value?.alias)
+        assertEquals("hermes-v2", store().previous.value?.alias)
+        assertNull(store.interrupted.value)
+        assertEquals(2, restarts.get())
+        assertEquals(0, stops.get())
+        assertEquals("The new image did not start (port 8642 in use). hr is back on v1.", store.lastLine())
+        assertFalse(store.operation.value!!.succeeded)
+    }
+
+    @Test
+    fun whenBothImagesFailToStartBothReasonsAreShown() {
+        restartResults += listOf("port 8642 in use", "the gateway stopped with exit code 1")
+        gatewayActive = false
+        val store = installedV1()
+
+        store.update(v2)
+        store.awaitIdle()
+
+        assertEquals("hermes", store.installed.value?.alias)
+        assertEquals(0, stops.get())
+        assertEquals(
+            "The new image did not start (port 8642 in use). hr is back on v1. " +
+                "The previous image did not start either (the gateway stopped with exit code 1).",
+            store.lastLine(),
+        )
+    }
+
+    @Test
+    fun aStoppedGatewayIsStoppedAgainAfterSwitchingBack() {
+        restartResults += listOf("port 8642 in use", null)
+        gatewayActive = false
+        val store = installedV1()
+
+        store.update(v2)
+        store.awaitIdle()
+
+        assertEquals(listOf("restart", "restart", "stop"), events)
+    }
+
+    @Test
+    fun retryingAFailedUpdateReusesItsContainer() {
+        restartResults += listOf("port 8642 in use", null)
+        val store = installedV1()
+        store.update(v2)
+        store.awaitIdle()
+        resetCounts()
+
+        assertTrue(store.update(v2))
+        store.awaitIdle()
+
+        assertTrue(calls.isEmpty())
+        assertEquals("hermes-v2", store.installed.value?.alias)
+        assertEquals("hermes", store.previous.value?.alias)
+        assertEquals(1, restarts.get())
+        assertTrue(store.operation.value!!.succeeded)
+    }
+
+    @Test
+    fun aFailedInstallSwitchesNothing() {
+        exitCode = 1
+        val store = installedV1()
+
+        store.update(v2)
+        store.awaitIdle()
+
+        assertEquals("hermes", store.installed.value?.alias)
+        assertNull(store.previous.value)
+        assertEquals(v2, store.interrupted.value)
+        assertEquals("v2", store().interrupted.value?.tag)
+        assertEquals("hermes", store().installed.value?.alias)
+        assertEquals(0, restarts.get())
+        assertEquals("pr-cli exited with 1.", store.lastLine())
+        assertFalse(store.operation.value!!.succeeded)
+    }
+
+    @Test
+    fun anInstallThatThrowsLeavesTheUpdateInterrupted() {
+        writeRecord()
+        files.rootfs("hermes").mkdirs()
+        val store = store(command = { _, _ -> throw IllegalStateException("no pr-cli") })
+
+        store.update(v2)
+        store.awaitIdle()
+
+        assertEquals("ERROR: no pr-cli", store.lastLine())
+        assertEquals("hermes", store.installed.value?.alias)
+        assertEquals(v2, store.interrupted.value)
+    }
+
+    @Test
+    fun anInterruptedUpdateIsNotReportedWhileItsRetryRuns() {
+        gate = CompletableDeferred()
+        val store = installedV1("pending.alias=hermes-v2", "pending.build_tag=v2", "pending.version=v0.23.0")
+        assertEquals(v2, store.interrupted.value)
+
+        store.update(v2)
+        eventually { calls.size == 1 }
+
+        assertNull(store.interrupted.value)
+        gate!!.complete(Unit)
+        store.awaitIdle()
+        assertNull(store.interrupted.value)
+        assertEquals("hermes-v2", store.installed.value?.alias)
+    }
+
+    @Test
+    fun lowSpaceRefusesTheUpdate() {
+        freeBytes = 1L * 1024 * 1024 * 1024
+        val store = installedV1()
+        val before = files.imageRecord.readText()
+
+        store.update(v2)
+        store.awaitIdle()
+
+        assertTrue(calls.isEmpty())
+        assertEquals(before, files.imageRecord.readText())
+        assertEquals(listOf("Updating needs 2 GB free; 1024 MB are free."), store.operation.value!!.lines)
+        assertFalse(store.operation.value!!.succeeded)
+        assertEquals(0, restarts.get())
+    }
+
+    @Test
+    fun anOpenTerminalRefusesTheUpdate() {
+        sessionsBlocking = true
+        val store = installedV1()
+        val before = files.imageRecord.readText()
+
+        store.update(v2)
+        store.awaitIdle()
+
+        assertTrue(calls.isEmpty())
+        assertEquals(before, files.imageRecord.readText())
+        assertEquals(listOf("End the terminal and wait for the login to finish before updating."), store.operation.value!!.lines)
+        assertFalse(store.operation.value!!.succeeded)
+        assertEquals(0, restarts.get())
+    }
+
+    @Test
+    fun anUpdateNeedsAnInstalledImageAndANewBuild() {
+        assertFalse(store().update(v2))
+        val store = installedV1()
+
+        assertFalse(store.update(ImageBuild("v1", "v0.22.3")))
+        assertNull(store.operation.value)
+    }
+
+    @Test
+    fun aStoppedGatewayIsStoppedAgainAfterTheUpdate() {
+        gatewayActive = false
+        val store = installedV1()
+
+        store.update(v2)
+        store.awaitIdle()
+
+        assertEquals(1, stops.get())
+        assertEquals(listOf("restart", "stop"), events)
+    }
+
+    @Test
+    fun anInterruptedInstallIsReported() {
+        val store = installedV1("pending.alias=hermes-v2", "pending.build_tag=v2", "pending.version=v0.23.0")
+        marker("hermes-v2").apply { parentFile!!.mkdirs() }.writeText("")
+
+        assertEquals("v2", store.interrupted.value?.tag)
+        assertEquals(v2, store.interrupted.value)
+        assertTrue(store.removeInterrupted())
+        store.awaitIdle()
+
+        assertEquals(listOf(listOf("remove", "hermes-v2")), calls)
+        assertNull(store.interrupted.value)
+        assertNull(store().interrupted.value)
+        assertFalse(files.imageRecord.readText().contains("pending."))
+        assertEquals("hermes", store.installed.value?.alias)
+        assertTrue(store.operation.value!!.succeeded)
+    }
+
+    @Test
+    fun anInterruptedInstallWithNothingOnDiskIsClearedWithoutPrCli() {
+        val store = installedV1("pending.alias=hermes-v2", "pending.build_tag=v2", "pending.version=v0.23.0")
+
+        assertTrue(store.removeInterrupted())
+        store.awaitIdle()
+
+        assertTrue(calls.isEmpty())
+        assertNull(store.interrupted.value)
+        assertFalse(store.removeInterrupted())
+    }
+
+    @Test
+    fun aFailedRemovalKeepsTheInterruptedInstall() {
+        val store = installedV1("pending.alias=hermes-v2", "pending.build_tag=v2", "pending.version=v0.23.0")
+        marker("hermes-v2").apply { parentFile!!.mkdirs() }.writeText("")
+        exitCode = 1
+
+        store.removeInterrupted()
+        store.awaitIdle()
+
+        assertEquals("pr-cli exited with 1.", store.lastLine())
+        assertEquals(v2, store.interrupted.value)
+        assertEquals(v2, store().interrupted.value)
+    }
+
+    @Test
+    fun aPendingInstallThatIsCurrentIsNotInterrupted() {
+        writeRecord("alias=hermes-v2", "pending.alias=hermes-v2", "pending.build_tag=v2")
+        files.rootfs("hermes-v2").mkdirs()
+
+        assertNull(store().interrupted.value)
+    }
+
+    @Test
+    fun aFinishedInstallWhoseSwitchWasLostIsReused() {
+        val store = installedV1("pending.alias=hermes-v2", "pending.build_tag=v2", "pending.version=v0.23.0")
+        files.rootfs("hermes-v2").mkdirs()
+        assertEquals(v2, store.interrupted.value)
+
+        store.update(v2)
+        store.awaitIdle()
+
+        assertTrue(calls.isEmpty())
+        assertEquals("hermes-v2", store.installed.value?.alias)
+        assertEquals("hermes", store.previous.value?.alias)
+        assertNull(store.interrupted.value)
+        assertEquals(1, restarts.get())
+    }
+
+    @Test
+    fun anUnfinishedInstallIsInstalledAgain() {
+        val store = installedV1("pending.alias=hermes-v2", "pending.build_tag=v2", "pending.version=v0.23.0")
+        files.rootfs("hermes-v2").mkdirs()
+        marker("hermes-v2").writeText("")
+
+        store.update(v2)
+        store.awaitIdle()
+
+        assertEquals(listOf(listOf("install", "ghcr.io/oonid/hermes-agent:v2", "--override-alias", "hermes-v2")), calls)
+        assertEquals("hermes-v2", store.installed.value?.alias)
+    }
+
+    @Test
+    fun anOlderInterruptedInstallIsCleanedFirst() {
+        val store = installedV1("pending.alias=hermes-v2", "pending.build_tag=v2", "pending.version=v0.23.0")
+        marker("hermes-v2").apply { parentFile!!.mkdirs() }.writeText("")
+
+        store.update(v3)
+        store.awaitIdle()
+
+        assertEquals(
+            listOf(
+                listOf("remove", "hermes-v2"),
+                listOf("install", "ghcr.io/oonid/hermes-agent:v3", "--override-alias", "hermes-v3"),
+            ),
+            calls,
+        )
+        assertFalse(marker("hermes-v2").exists())
+        assertEquals("hermes-v3", store.installed.value?.alias)
+        assertEquals("hermes", store.previous.value?.alias)
+        assertNull(store.interrupted.value)
+    }
+
+    @Test
+    fun aFailedCleanupOfAnOlderInstallStopsTheUpdate() {
+        val store = installedV1("pending.alias=hermes-v2", "pending.build_tag=v2", "pending.version=v0.23.0")
+        marker("hermes-v2").apply { parentFile!!.mkdirs() }.writeText("")
+        val before = files.imageRecord.readText()
+        exitCode = 1
+
+        store.update(v3)
+        store.awaitIdle()
+
+        assertEquals(listOf(listOf("remove", "hermes-v2")), calls)
+        assertEquals(before, files.imageRecord.readText())
+        assertEquals("pr-cli exited with 1.", store.lastLine())
+        assertEquals(v2, store.interrupted.value)
+        assertEquals(0, restarts.get())
+    }
+
+    @Test
+    fun anOlderInterruptedInstallWithNothingOnDiskIsReplaced() {
+        val store = installedV1("pending.alias=hermes-v2", "pending.build_tag=v2", "pending.version=v0.23.0")
+        exitCode = 1
+
+        store.update(v3)
+        store.awaitIdle()
+
+        assertEquals(listOf(listOf("install", "ghcr.io/oonid/hermes-agent:v3", "--override-alias", "hermes-v3")), calls)
+        assertEquals(v3, store.interrupted.value)
+    }
+
+    @Test
+    fun anUpdateRemovesTheImageTwoBuildsOld() {
+        writeRecord(*arrayOf("alias=hermes-v1") + previousRecord("hermes-v0", "v0"))
+        files.rootfs("hermes-v1").mkdirs()
+        files.rootfs("hermes-v0").mkdirs()
+        val store = store()
+        val keptDuringRestart = CopyOnWriteArrayList<Boolean>()
+        onRestart = { keptDuringRestart += files.rootfs("hermes-v0").isDirectory }
+
+        store.update(v3)
+        store.awaitIdle()
+
+        assertEquals(listOf(true), keptDuringRestart)
+
+        assertEquals(
+            listOf(
+                listOf("install", "ghcr.io/oonid/hermes-agent:v3", "--override-alias", "hermes-v3"),
+                listOf("remove", "hermes-v0"),
+            ),
+            calls,
+        )
+        assertEquals("hermes-v3", store.installed.value?.alias)
+        assertEquals("hermes-v1", store.previous.value?.alias)
+        assertFalse(files.imageRecord.readText().contains("hermes-v0"))
+        assertEquals("Removed the older image (v0).", store.lastLine())
+        assertTrue(store.operation.value!!.succeeded)
+    }
+
+    @Test
+    fun theImageTwoBuildsOldIsRemovedAfterSwitchingBackToo() {
+        restartResults += listOf("port 8642 in use", null)
+        writeRecord(*arrayOf("alias=hermes-v1") + previousRecord("hermes-v0", "v0"))
+        files.rootfs("hermes-v1").mkdirs()
+        files.rootfs("hermes-v0").mkdirs()
+        val store = store()
+
+        store.update(v3)
+        store.awaitIdle()
+
+        assertEquals(listOf("remove", "hermes-v0"), calls.last())
+        assertEquals("hermes-v1", store.installed.value?.alias)
+        assertEquals("hermes-v3", store.previous.value?.alias)
+        assertEquals(
+            listOf(
+                "The new image did not start (port 8642 in use). hr is back on v1.",
+                "Removed the older image (v0).",
+            ),
+            store.operation.value!!.lines.takeLast(2),
+        )
+        assertFalse(store.operation.value!!.succeeded)
+    }
+
+    @Test
+    fun aFailedRemovalOfTheImageTwoBuildsOldIsReported() {
+        writeRecord(*arrayOf("alias=hermes-v1") + previousRecord("hermes-v0", "v0"))
+        files.rootfs("hermes-v1").mkdirs()
+        files.rootfs("hermes-v0").mkdirs()
+        val store = store()
+        onRestart = { exitCode = 1 }
+
+        store.update(v3)
+        store.awaitIdle()
+
+        assertEquals("pr-cli exited with 1.", store.lastLine())
+        assertEquals("hermes-v3", store.installed.value?.alias)
+        assertEquals("hermes-v1", store.previous.value?.alias)
+        assertTrue(store.operation.value!!.succeeded)
+    }
+
+    @Test
+    fun aMissingCurrentContainerFallsBackToThePrevious() {
+        writeRecord(*arrayOf("alias=hermes-v2") + previousRecord("hermes", "v1"))
+        files.rootfs("hermes").mkdirs()
+
+        val store = store()
+
+        assertEquals("hermes", store.installed.value?.alias)
+        assertEquals("v1", store.installed.value?.buildTag)
+        assertNull(store.previous.value)
+        assertTrue(store.containerExists)
+    }
+
+    @Test
+    fun aPreviousWithoutItsContainerIsNotKept() {
+        val store = installedV1(*previousRecord("hermes-v0", "v0"))
+
+        assertEquals("hermes", store.installed.value?.alias)
+        assertNull(store.previous.value)
+    }
+
+    @Test
+    fun switchBackUsesThePreviousImage() {
+        assertFalse(installedV1().switchBack())
+        val store = store()
+        store.update(v2)
+        store.awaitIdle()
+        resetCounts()
+
+        assertTrue(store.switchBack())
+        store.awaitIdle()
+
+        assertTrue(calls.isEmpty())
+        assertEquals("hermes", store.installed.value?.alias)
+        assertEquals("hermes-v2", store.previous.value?.alias)
+        assertEquals(1, restarts.get())
+        assertEquals(ImageStore.Kind.SwitchBack, store.operation.value!!.kind)
+        assertEquals("Updated to v1. The previous image (v2) is kept until you remove it.", store.lastLine())
+    }
+
+    @Test
+    fun switchBackIsRefusedWhileTheTerminalIsOpen() {
+        val store = installedV1()
+        store.update(v2)
+        store.awaitIdle()
+        resetCounts()
+        sessionsBlocking = true
+
+        store.switchBack()
+        store.awaitIdle()
+
+        assertEquals(0, restarts.get())
+        assertEquals("hermes-v2", store.installed.value?.alias)
+        assertEquals("End the terminal and wait for the login to finish before updating.", store.lastLine())
+    }
+
+    @Test
+    fun removePreviousRemovesOnlyThePrevious() {
+        val store = installedV1()
+        assertFalse(store.removePrevious())
+        store.update(v2)
+        store.awaitIdle()
+        resetCounts()
+
+        assertTrue(store.removePrevious())
+        store.awaitIdle()
+
+        assertEquals(listOf(listOf("remove", "hermes")), calls)
+        assertNull(store.previous.value)
+        assertNull(store().previous.value)
+        assertEquals("hermes-v2", store.installed.value?.alias)
+        assertTrue(files.rootfs("hermes-v2").isDirectory)
+        assertFalse(files.imageRecord.readText().contains("previous."))
+        assertTrue(store.operation.value!!.succeeded)
+    }
+
+    @Test
+    fun aFailedRemovalKeepsThePrevious() {
+        val store = installedV1()
+        store.update(v2)
+        store.awaitIdle()
+        exitCode = 1
+
+        store.removePrevious()
+        store.awaitIdle()
+
+        assertEquals("pr-cli exited with 1.", store.lastLine())
+        assertEquals("hermes", store.previous.value?.alias)
+    }
+
+    @Test
+    fun removeRemovesEveryHermesContainer() {
+        writeRecord(
+            *arrayOf("alias=hermes-v2") + previousRecord("hermes", "v1") +
+                arrayOf("pending.alias=hermes-v3", "pending.build_tag=v3", "pending.version=v0.24.0"),
+        )
+        files.rootfs("hermes-v2").mkdirs()
+        files.rootfs("hermes").mkdirs()
+        marker("hermes-v3").writeText("")
+        files.rootfs("hermes-v0").mkdirs()
+        files.rootfs("other").mkdirs()
+        val store = store()
+
+        assertTrue(store.remove())
+        store.awaitIdle()
+
+        assertEquals(
+            setOf(listOf("remove", "hermes-v3"), listOf("remove", "hermes"), listOf("remove", "hermes-v2"), listOf("remove", "hermes-v0")),
+            calls.toSet(),
+        )
+        assertEquals(4, calls.size)
+        assertEquals(listOf("remove", "hermes-v2"), calls.last())
+        assertFalse(files.imageRecord.exists())
+        assertNull(store.installed.value)
+        assertNull(store.previous.value)
+        assertNull(store.interrupted.value)
+        assertTrue(files.rootfs("other").isDirectory)
+    }
+
+    @Test
+    fun aFailedRemoveKeepsWhatIsLeft() {
+        val store = installedV1()
+        store.update(v2)
+        store.awaitIdle()
+        exitCode = 1
+
+        store.remove()
+        store.awaitIdle()
+
+        assertEquals("pr-cli exited with 1.", store.lastLine())
+        assertEquals("hermes-v2", store.installed.value?.alias)
+        assertEquals("hermes", store.previous.value?.alias)
+    }
+
+    @Test
+    fun installKeepsAnInterruptedInstall() {
+        writeRecord("pending.alias=hermes-v2", "pending.build_tag=v2", "pending.version=v0.23.0")
+        val store = store()
+        assertNull(store.installed.value)
+
+        store.install()
+        store.awaitIdle()
+
+        assertEquals("hermes", store.installed.value?.alias)
+        assertEquals(v2, store.interrupted.value)
+        assertEquals(v2, store().interrupted.value)
+    }
+
+    @Test
+    fun theGatewayMayStartDuringTheUpdatesRestart() {
+        gate = CompletableDeferred()
+        val store = installedV1()
+        val inRestart = CopyOnWriteArrayList<Boolean>()
+        onRestart = { inRestart += store.canLaunch }
+        assertTrue(store.canLaunch)
+
+        store.update(v2)
+        eventually { calls.size == 1 }
+        assertFalse(store.canLaunch)
+        gate!!.complete(Unit)
+        store.awaitIdle()
+
+        assertEquals(listOf(true), inRestart)
+        assertTrue(store.canLaunch)
+    }
+
+    @Test
+    fun theGatewayMayNotStartDuringARemoval() {
+        gate = CompletableDeferred()
+        val store = installedV1()
+        inUse = false
+
+        store.remove()
+        eventually { calls.size == 1 }
+
+        assertFalse(store.canLaunch)
+        gate!!.complete(Unit)
+        store.awaitIdle()
+    }
+
+    @Test
+    fun refreshWaitsForTheRunningOperation() {
+        gate = CompletableDeferred()
+        val store = installedV1()
+        store.update(v2)
+        eventually { calls.size == 1 }
+
+        store.refresh()
+
+        assertNull(store.interrupted.value)
+        gate!!.complete(Unit)
+        store.awaitIdle()
     }
 }
