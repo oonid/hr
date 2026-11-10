@@ -14,6 +14,8 @@ class LogBuffer(
 ) {
     private enum class Mode { TEXT, ESCAPE, INTERMEDIATE, CSI, STRING }
 
+    private class Window(val key: String, val start: Int)
+
     private val lock = Any()
     private val lines = ArrayDeque<String>()
     private val current = StringBuilder()
@@ -25,6 +27,7 @@ class LogBuffer(
     private var sequenceLength = 0
     private var returned = false
     private var known: List<String> = emptyList()
+    private var windows: Map<String, List<Window>> = emptyMap()
     private var rawLimit = maxLineChars
 
     private val _revision = MutableStateFlow(0L)
@@ -73,8 +76,21 @@ class LogBuffer(
         found.filter { it.length >= MIN_SECRET_LENGTH }.distinct().sortedByDescending { it.length }
 
     private fun remember(found: List<String>) {
+        if (found == known) return
         known = found
         rawLimit = maxLineChars + (found.maxOfOrNull { it.length - 1 } ?: 0)
+        windows = index(found)
+    }
+
+    private fun index(found: List<String>): Map<String, List<Window>> {
+        val map = HashMap<String, MutableList<Window>>()
+        for (key in found) {
+            if (key.length < MIN_SCRUBBED) continue
+            for (start in 0..key.length - MIN_SECRET_LENGTH) {
+                map.getOrPut(key.substring(start, start + MIN_SECRET_LENGTH)) { mutableListOf() }.add(Window(key, start))
+            }
+        }
+        return map
     }
 
     private fun feed(c: Char) {
@@ -144,10 +160,14 @@ class LogBuffer(
     }
 
     private fun trailingSecretPrefix(): Int = known.maxOfOrNull { secret ->
-        (minOf(secret.length - 1, current.length) downTo MIN_HIDDEN).firstOrNull { size ->
-            current.endsWith(secret.subSequence(0, size))
-        } ?: 0
+        (minOf(secret.length - 1, current.length) downTo MIN_HIDDEN).firstOrNull { size -> endsWithStartOf(secret, size) } ?: 0
     } ?: 0
+
+    private fun endsWithStartOf(secret: String, size: Int): Boolean {
+        val from = current.length - size
+        for (i in 0 until size) if (current[from + i] != secret[i]) return false
+        return true
+    }
 
     private fun endLine() {
         store(current.toString())
@@ -161,12 +181,11 @@ class LogBuffer(
     }
 
     private fun scrub(line: String): String {
-        val keys = known.filter { it.length >= MIN_SCRUBBED }
-        if (keys.isEmpty()) return line
+        if (windows.isEmpty()) return line
         val out = StringBuilder()
         var at = 0
         while (at < line.length) {
-            val run = keys.maxOf { key -> key.indices.maxOf { start -> common(line, at, key, start) } }
+            val run = longestRun(line, at)
             if (run >= MIN_SECRET_LENGTH) {
                 out.append(REDACTED)
                 at += run
@@ -176,6 +195,12 @@ class LogBuffer(
             }
         }
         return out.toString()
+    }
+
+    private fun longestRun(line: String, at: Int): Int {
+        if (at + MIN_SECRET_LENGTH > line.length) return 0
+        val candidates = windows[line.substring(at, at + MIN_SECRET_LENGTH)] ?: return 0
+        return candidates.maxOf { common(line, at, it.key, it.start) }
     }
 
     private fun common(line: String, at: Int, key: String, start: Int): Int {
