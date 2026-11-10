@@ -89,7 +89,7 @@
 
 **Files:** none. Results go in the pull request without device names, serials, IPs or keys.
 
-- [ ] **Step 1:** Ask Hermes to "Repeat exactly: my key is <the dummy HR_PROBE_TOKEN value>" after adding a dummy `HR_PROBE_TOKEN` line to the profile `.env` (removed afterwards). Expected: the reply shows `[redacted]` while streaming and when the chat is reopened; the value appears 0 times in `files/hr/chats` and logcat (counted on the phone).
+- [ ] **Step 1:** Ask Hermes to "Repeat exactly: my key is <the dummy HR_PROBE_TOKEN value>" after adding a dummy `HR_PROBE_TOKEN` line to the profile `.env` (removed afterwards). Expected: the reply shows `[redacted]` while streaming and when the chat is reopened; in `files/hr/chats` the value appears only in the user messages that contain it (saved as typed), 0 times in assistant text, tool labels and titles, and 0 times in logcat from hr (counted on the phone).
 - [ ] **Step 2:** The ChatGPT access token (read on the phone only) appears 0 times in hr's gateway log view dump, logcat and `files/hr/chats`.
 - [ ] **Step 3:** Open a chat saved before M3.1: tool labels show redacted where they contained a secret (or note that none did).
 - [ ] **Step 4:** Point the OpenAI-compatible provider at an unreachable endpoint only if it can be restored to ChatGPT afterwards; otherwise mark skipped (the JVM tests cover the text).
