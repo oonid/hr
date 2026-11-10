@@ -1,7 +1,6 @@
 package id.or.oo.hr.chat
 
 import id.or.oo.hr.gateway.GatewayState
-import id.or.oo.hr.redact
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
@@ -144,7 +143,7 @@ class ChatController(
             val turnId = newId()
             val previous = current.pendingTurns
             val conversation = current.copy(
-                title = if (current.messages.isEmpty()) titleFor(redact(message, known)) else current.title,
+                title = if (current.messages.isEmpty()) titleFor(redactPrefixes(message, known)) else current.title,
                 updatedAt = clock(),
                 messages = current.messages + ChatMessage(true, message),
                 pendingTurns = (previous + turnId).takeLast(MAX_PENDING),
@@ -272,7 +271,7 @@ class ChatController(
             running.turn = when (event) {
                 is ChatEvent.Text -> {
                     running.raw += event.delta
-                    turn.copy(text = displayText(running.raw, known), approval = null, answering = false)
+                    turn.copy(text = redactPrefixes(running.raw, known), approval = null, answering = false)
                 }
                 is ChatEvent.Tool -> turn.copy(tools = toolLines(turn.tools, event), approval = null, answering = false)
                 is ChatEvent.Approval -> turn.copy(approval = event, answering = false)
@@ -301,7 +300,7 @@ class ChatController(
             val (interrupted, reason) = if (running.stopped || outcome == null) true to null else ending(outcome, gateway.value is GatewayState.Running)
             val clears = !running.failed && (running.stopped || outcome == null || outcome is TurnOutcome.Finished)
             val pending = (running.unresolved + listOfNotNull(running.turnId.takeUnless { clears })).takeLast(MAX_PENDING)
-            val text = finalText(running.raw, known).trim()
+            val text = redactPrefixes(running.raw, known).trim()
             val tools = running.turn.tools.map { it.label }
             val reply = if (text.isEmpty() && tools.isEmpty()) emptyList() else listOf(ChatMessage(false, text, tools, interrupted))
             val conversation = if (reply.isEmpty() && pending == running.conversation.pendingTurns) {
@@ -357,7 +356,7 @@ class ChatController(
 
     private fun listNow() {
         val known = secrets()
-        mutableConversations.value = store.list().map { it.copy(title = redact(it.title, known)) }
+        mutableConversations.value = store.list().map { it.copy(title = redactPrefixes(it.title, known)) }
     }
 
     private fun publish(known: List<String> = secrets()) {
@@ -372,8 +371,8 @@ class ChatController(
         val last = shown
         if (last != null && last.from === conversation && last.secrets == known) return last.copy
         val copy = conversation.copy(
-            title = redact(conversation.title, known),
-            messages = conversation.messages.map { m -> m.copy(text = redact(m.text, known), tools = m.tools.map { redact(it, known) }) },
+            title = redactPrefixes(conversation.title, known),
+            messages = conversation.messages.map { m -> m.copy(text = redactPrefixes(m.text, known), tools = m.tools.map { redactPrefixes(it, known) }) },
         )
         shown = Shown(conversation, known, copy)
         return copy

@@ -999,7 +999,7 @@ class ChatControllerTest {
         controller.send("what is it")
         val call = nextCall()
         call.onEvent(ChatEvent.Text("key is hrsecret"))
-        assertEquals("key is ", controller.view.value!!.turn!!.text)
+        assertEquals("key is [redacted]", controller.view.value!!.turn!!.text)
         call.onEvent(ChatEvent.Text("12345 done"))
         assertEquals("key is [redacted] done", controller.view.value!!.turn!!.text)
         call.outcome.complete(TurnOutcome.Finished("stop"))
@@ -1019,7 +1019,7 @@ class ChatControllerTest {
             call.onEvent(ChatEvent.Text(c.toString()))
             shown += controller.view.value!!.turn!!.text
         }
-        assertTrue(shown.none { it.contains("hr") || it.contains("other-") })
+        assertTrue(shown.none { it.contains("hrsecret") || it.contains("other-se") })
         assertEquals("key is [redacted] then [redacted].", shown.last())
         call.outcome.complete(TurnOutcome.Finished("stop"))
         assertEquals("key is [redacted] then [redacted].", ended(chat.id, 2).conversation.messages[1].text)
@@ -1032,23 +1032,11 @@ class ChatControllerTest {
         controller.send("hi")
         val call = nextCall()
         call.onEvent(ChatEvent.Text("a hrsec"))
-        assertEquals("a ", controller.view.value!!.turn!!.text)
+        assertEquals("a hrsec", controller.view.value!!.turn!!.text)
         call.onEvent(ChatEvent.Text("tion"))
         assertEquals("a hrsection", controller.view.value!!.turn!!.text)
         call.outcome.complete(TurnOutcome.Finished("stop"))
         assertEquals(ChatMessage(false, "a hrsection"), ended(chat.id, 2).conversation.messages[1])
-    }
-
-    @Test
-    fun aHeldPrefixIsFlushedWhenTheTurnEnds() {
-        known = listOf("hrsecret12345")
-        val chat = open()
-        controller.send("hi")
-        val call = nextCall()
-        call.onEvent(ChatEvent.Text("ends with hrsec"))
-        assertEquals("ends with ", controller.view.value!!.turn!!.text)
-        call.outcome.complete(TurnOutcome.Finished("stop"))
-        assertEquals(ChatMessage(false, "ends with hrsec"), ended(chat.id, 2).conversation.messages[1])
     }
 
     @Test
@@ -1086,7 +1074,7 @@ class ChatControllerTest {
             "hr-old",
             "key hrsecret12345",
             10L,
-            listOf(ChatMessage(true, "use hrsecret12345"), ChatMessage(false, "done hrsecret12345", listOf("💻 echo hrsecret12345", "📖 read"))),
+            listOf(ChatMessage(true, "use hrsecret12345"), ChatMessage(false, "done hrsecret12345", listOf("💻 echo hrsecret12…", "📖 read"))),
         )
         store.save(old)
         val file = File(tmp.root, "chats/old.json")
@@ -1096,7 +1084,7 @@ class ChatControllerTest {
         assertEquals(
             old.copy(
                 title = "key [redacted]",
-                messages = listOf(ChatMessage(true, "use [redacted]"), ChatMessage(false, "done [redacted]", listOf("💻 echo [redacted]", "📖 read"))),
+                messages = listOf(ChatMessage(true, "use [redacted]"), ChatMessage(false, "done [redacted]", listOf("💻 echo [redacted]…", "📖 read"))),
             ),
             view.conversation,
         )
@@ -1139,11 +1127,38 @@ class ChatControllerTest {
         controller.send("hi")
         val call = nextCall()
         call.onEvent(ChatEvent.Text("key is hrsecret12"))
-        assertEquals("key is ", controller.view.value!!.turn!!.text)
+        assertEquals("key is [redacted]", controller.view.value!!.turn!!.text)
         controller.stop()
         val done = ended(chat.id, 2)
         assertEquals(ChatMessage(false, "key is [redacted]", interrupted = true), done.conversation.messages[1])
         assertEquals(done.conversation, persisted(done))
         assertFalse(store.load(chat.id)!!.messages[1].text.contains("hrsecret"))
+    }
+
+    @Test
+    fun aLongSecretStreamedOneCharacterAtATimeStaysFast() {
+        val random = java.util.Random(7)
+        val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+        val long = String(CharArray(2_000) { alphabet[random.nextInt(alphabet.length)] })
+        known = listOf(long, "hrsecret12345")
+        val reply = buildString {
+            while (length < 20_000) append("some words ").append(long).append(" and ").append(long.take(40)).append("… ")
+        }.take(20_000)
+        val chat = open()
+        controller.send("go")
+        val call = nextCall()
+        val needle = long.take(8)
+        val start = System.nanoTime()
+        var leaked = false
+        for (c in reply) {
+            call.onEvent(ChatEvent.Text(c.toString()))
+            if (controller.view.value!!.turn!!.text.contains(needle)) leaked = true
+            if (System.nanoTime() - start > 5_000_000_000L) break
+        }
+        val elapsed = (System.nanoTime() - start) / 1_000_000
+        assertTrue("took $elapsed ms", elapsed < 5_000)
+        assertFalse(leaked)
+        call.outcome.complete(TurnOutcome.Finished("stop"))
+        assertFalse(ended(chat.id, 2).conversation.messages[1].text.contains(needle))
     }
 }
