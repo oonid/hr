@@ -269,7 +269,7 @@ class ChatController(
             val running = active ?: return
             if (running.job !== me) return
             val turn = running.turn
-            running.turn = when (event) {
+            running.turn = redactTools(when (event) {
                 is ChatEvent.Text -> {
                     running.raw += event.delta
                     turn.copy(text = redactPrefixes(running.raw, known), approval = null, answering = false)
@@ -277,9 +277,19 @@ class ChatController(
                 is ChatEvent.Tool -> turn.copy(tools = toolLines(turn.tools, event, known), approval = null, answering = false)
                 is ChatEvent.Approval -> turn.copy(approval = event, answering = false)
                 else -> return
-            }
+            }, known)
             publish(known)
         }
+    }
+
+    private fun redactTools(turn: Turn, known: List<String>): Turn {
+        if (known.isEmpty()) return turn
+        var changed = false
+        val tools = turn.tools.map { line ->
+            val label = redactPrefixes(line.label, known)
+            if (label == line.label) line else line.copy(label = label).also { changed = true }
+        }
+        return if (changed) turn.copy(tools = tools) else turn
     }
 
     private fun toolLines(lines: List<ToolLine>, event: ChatEvent.Tool, known: List<String>): List<ToolLine> {
