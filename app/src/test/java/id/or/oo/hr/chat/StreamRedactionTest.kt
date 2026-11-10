@@ -1,6 +1,8 @@
 package id.or.oo.hr.chat
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class StreamRedactionTest {
@@ -51,5 +53,27 @@ class StreamRedactionTest {
         assertEquals("[redacted]", redactPrefixes("abcdefghijklmnopqrst", listOf("abcdefghij", "ijklmnopqrst")))
         assertEquals("is [redacted]!", redactPrefixes("is abcdefghijklm!", listOf("abcdefgh", "fghijklm")))
         assertEquals("[redacted]", redactPrefixes("abcdefghijklmnop", listOf("abcdefgh", "ijklmnop")))
+    }
+
+    @Test
+    fun aRunContainedInAnEarlierOneStaysRedacted() {
+        assertEquals("[redacted]XYZ", redactPrefixes("abcdefghijklmnopXYZ", listOf("abcdefghijklmnop", "cdefghij")))
+    }
+
+    @Test
+    fun aLargeTextWithALongSecretIsLinear() {
+        val random = java.util.Random(7)
+        val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+        val long = String(CharArray(8_000) { alphabet[random.nextInt(alphabet.length)] })
+        val text = buildString {
+            while (length < 200_000) append("plain words ".repeat(3_000)).append(long).append(" then ").append(long.take(40)).append("… ")
+        }
+        val start = System.nanoTime()
+        val out = redactPrefixes(text, listOf(long, secret))
+        val elapsed = (System.nanoTime() - start) / 1_000_000
+
+        assertTrue("took $elapsed ms", elapsed < 2_000)
+        assertFalse(out.contains(long.take(8)))
+        assertTrue(out.contains("[redacted] then [redacted]… "))
     }
 }

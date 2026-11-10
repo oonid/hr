@@ -139,7 +139,7 @@ class TestRequestTest {
     }
 
     @Test
-    fun aTimeoutIsFailed() {
+    fun aPlainIOExceptionIsFailedWithItsMessage() {
         val http = object : id.or.oo.hr.image.Http {
             override fun get(url: String, headers: Map<String, String>) = error("unused")
             override fun post(url: String, headers: Map<String, String>, body: String): HttpResponse =
