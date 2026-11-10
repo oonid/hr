@@ -126,6 +126,32 @@ class TestRequestTest {
     }
 
     @Test
+    fun aTimeoutSaysWhatToCheck() {
+        val http = object : id.or.oo.hr.image.Http {
+            override fun get(url: String, headers: Map<String, String>) = error("unused")
+            override fun post(url: String, headers: Map<String, String>, body: String): HttpResponse =
+                throw java.net.SocketTimeoutException("Read timed out")
+        }
+
+        val expected = "the gateway did not answer in time; the model endpoint may be unreachable" +
+            " — check the provider's base URL and key"
+        assertEquals(TestResult.Failed(expected), TestRequest(http, { "k" }, url).send())
+    }
+
+    @Test
+    fun anIOExceptionMessageIsRedacted() {
+        val http = object : id.or.oo.hr.image.Http {
+            override fun get(url: String, headers: Map<String, String>) = error("unused")
+            override fun post(url: String, headers: Map<String, String>, body: String): HttpResponse =
+                throw IOException("stream broke for sk-one-key and tok-two-key")
+        }
+
+        val result = TestRequest(http, { "sk-one-key" }, url, { listOf("sk-one-key", "tok-two-key") }).send()
+
+        assertEquals(TestResult.Failed("stream broke for [redacted] and [redacted]"), result)
+    }
+
+    @Test
     fun anIoErrorWithoutAMessageIsNamedByItsClass() {
         val http = object : id.or.oo.hr.image.Http {
             override fun get(url: String, headers: Map<String, String>) = error("unused")

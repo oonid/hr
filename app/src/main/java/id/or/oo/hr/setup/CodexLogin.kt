@@ -12,7 +12,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 const val LOGIN_SCRIPT = "PYTHONUNBUFFERED=1 hermes auth add openai-codex --no-browser"
 private const val STATUS_SCRIPT = "hermes auth status openai-codex"
 private const val LOGGED_IN_LINE = "openai-codex: logged in"
-const val LIMIT_MS = 20 * 60_000L
+private const val LIMIT_MS = 20 * 60_000L
 private const val EXPIRED = "the sign-in code expired; sign in again"
 private const val TASK_LABEL = "Signing in to ChatGPT…"
 
