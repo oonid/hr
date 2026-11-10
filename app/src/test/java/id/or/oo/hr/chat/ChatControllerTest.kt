@@ -993,6 +993,22 @@ class ChatControllerTest {
     }
 
     @Test
+    fun aToolLineShownBeforeItsSecretIsKnownIsRedactedOnceItIsKnown() {
+        val chat = open()
+        controller.send("go")
+        val call = nextCall()
+        call.onEvent(ChatEvent.Tool("c1", "curl late-secret-value", true))
+        assertEquals("curl late-secret-value", controller.view.value!!.turn!!.tools.single().label)
+        known = listOf("late-secret-value")
+        call.onEvent(ChatEvent.Text("hello"))
+        assertEquals(listOf("curl [redacted]"), controller.view.value!!.turn!!.tools.map { it.label })
+        call.onEvent(ChatEvent.Tool("c2", "ls", true))
+        assertEquals(listOf("curl [redacted]", "ls"), controller.view.value!!.turn!!.tools.map { it.label })
+        call.outcome.complete(TurnOutcome.Finished("stop"))
+        assertEquals(listOf("curl [redacted]", "ls"), ended(chat.id, 2).conversation.messages[1].tools)
+    }
+
+    @Test
     fun aSecretSplitAcrossDeltasIsNeverShown() {
         known = listOf("hrsecret12345")
         val chat = open()
