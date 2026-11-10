@@ -348,6 +348,14 @@ class LogBufferTest {
     }
 
     @Test
+    fun theLongestTrailingPartAcrossSecretsIsHeldBack() {
+        val redacting = LogBuffer(secrets = { listOf("abcdefghijkl", "efghXXXXXXXX") })
+        redacting.append("x abcdefgh")
+
+        assertEquals(listOf("x "), redacting.snapshot())
+    }
+
+    @Test
     fun textWithoutKeyPartsIsUnchanged() {
         val redacting = LogBuffer(secrets = { listOf(KEY, "0123456789ab") })
         redacting.append("commit 3f9a0c7 merged, id deadbeef00112233 01234567\n")
