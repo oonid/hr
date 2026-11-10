@@ -95,27 +95,33 @@ class ProfileStore(private val files: HrFiles, private val random: SecureRandom 
         }
 
     private fun loginTokens(auth: File): List<String> {
+        if (auth.length() > MAX_AUTH_BYTES) return emptyList()
         val found = linkedSetOf<String>()
         try {
-            collectTokens(JSONObject(auth.readText()), found)
+            collectTokens(JSONObject(auth.readText()), found, 0)
         } catch (e: Exception) {
+            return emptyList()
+        } catch (e: StackOverflowError) {
             return emptyList()
         }
         return found.toList()
     }
 
-    private fun collectTokens(node: Any?, into: MutableSet<String>) {
+    private fun collectTokens(node: Any?, into: MutableSet<String>, depth: Int) {
+        if (depth > MAX_AUTH_DEPTH) return
         when (node) {
             is JSONObject -> node.keys().forEach { name ->
                 val value = node.opt(name)
                 if (name in TOKEN_KEYS && value is String && value.isNotBlank()) into.add(value)
-                collectTokens(value, into)
+                collectTokens(value, into, depth + 1)
             }
-            is JSONArray -> for (i in 0 until node.length()) collectTokens(node.opt(i), into)
+            is JSONArray -> for (i in 0 until node.length()) collectTokens(node.opt(i), into, depth + 1)
         }
     }
 
     private companion object {
+        const val MAX_AUTH_BYTES = 1024 * 1024
+        const val MAX_AUTH_DEPTH = 32
         val TOKEN_KEYS = setOf("access_token", "refresh_token", "agent_key", "api_key")
         val KEY_FORMAT = Regex("[0-9a-f]{64}")
         val SECRET_SUFFIXES = listOf("_KEY", "_TOKEN", "_PASSWORD", "_SECRET")

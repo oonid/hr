@@ -199,6 +199,34 @@ class ProfileStoreTest {
     }
 
     @Test
+    fun aHugeAuthFileAddsNothing() {
+        val padding = "x".repeat(1024 * 1024)
+        authFile().writeText("""{"access_token":"huge-token-1","pad":"$padding"}""")
+
+        assertEquals(listOf(store.apiServerKey()), store.secrets())
+    }
+
+    @Test
+    fun aDeeplyNestedAuthFileAddsNothingAndDoesNotThrow() {
+        val depth = 10_000
+        authFile().writeText("[".repeat(depth) + "]".repeat(depth))
+
+        assertEquals(listOf(store.apiServerKey()), store.secrets())
+        assertEquals(listOf(store.apiServerKey()), store.secrets())
+    }
+
+    @Test
+    fun tokensBeyondTheDepthLimitAreIgnoredButShallowOnesKept() {
+        val deep = "{\"n\":".repeat(40) + """{"access_token":"deep-token-1"}""" + "}".repeat(40)
+        authFile().writeText("""{"refresh_token":"shallow-token-1","d":$deep}""")
+
+        val secrets = store.secrets()
+
+        assertTrue(secrets.contains("shallow-token-1"))
+        assertFalse(secrets.contains("deep-token-1"))
+    }
+
+    @Test
     fun blankAndNonStringTokensAreIgnored() {
         authFile().writeText("""{"access_token":"  ","refresh_token":12345678,"api_key":null,"agent_key":""}""")
 
