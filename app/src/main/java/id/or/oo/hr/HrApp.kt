@@ -112,6 +112,7 @@ class HrApp : Application(), ProotHost, SessionHost {
             ChatClient(profiles::apiServerKey, profiles::secrets),
             gateway.state,
             gatewayScope,
+            secrets = profiles::secrets,
         )
     }
 

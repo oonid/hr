@@ -60,6 +60,9 @@ class ChatControllerTest {
     private var gatewayWaitMs = 20L
 
     @Volatile
+    private var known: List<String> = emptyList()
+
+    @Volatile
     private var resolution = CompletableDeferred(true)
     private val resolutions = ConcurrentHashMap<String, CompletableDeferred<Boolean>>()
 
@@ -109,6 +112,7 @@ class ChatControllerTest {
             { "id-${ids.incrementAndGet()}" },
             Dispatchers.IO,
             gatewayWaitMs,
+            secrets = { known },
         )
     }
 
@@ -986,5 +990,145 @@ class ChatControllerTest {
         assertEquals("Read timed out", done.error)
         assertEquals(listOf(call.turnId), done.conversation.pendingTurns)
         assertEquals(0, gateway.subscriptionCount.value)
+    }
+
+    @Test
+    fun aSecretSplitAcrossDeltasIsNeverShown() {
+        known = listOf("hrsecret12345")
+        val chat = open()
+        controller.send("what is it")
+        val call = nextCall()
+        call.onEvent(ChatEvent.Text("key is hrsecret"))
+        assertEquals("key is ", controller.view.value!!.turn!!.text)
+        call.onEvent(ChatEvent.Text("12345 done"))
+        assertEquals("key is [redacted] done", controller.view.value!!.turn!!.text)
+        call.outcome.complete(TurnOutcome.Finished("stop"))
+        val done = ended(chat.id, 2)
+        assertEquals(ChatMessage(false, "key is [redacted] done"), done.conversation.messages[1])
+        assertEquals(done.conversation, persisted(done))
+    }
+
+    @Test
+    fun aSecretStreamedOneCharacterAtATimeIsNeverShown() {
+        known = listOf("hrsecret12345", "other-secret-value")
+        val chat = open()
+        controller.send("go")
+        val call = nextCall()
+        val shown = mutableListOf<String>()
+        for (c in "key is hrsecret12345 then other-secret-value.") {
+            call.onEvent(ChatEvent.Text(c.toString()))
+            shown += controller.view.value!!.turn!!.text
+        }
+        assertTrue(shown.none { it.contains("hr") || it.contains("other-") })
+        assertEquals("key is [redacted] then [redacted].", shown.last())
+        call.outcome.complete(TurnOutcome.Finished("stop"))
+        assertEquals("key is [redacted] then [redacted].", ended(chat.id, 2).conversation.messages[1].text)
+    }
+
+    @Test
+    fun aPrefixThatIsNotASecretIsReleased() {
+        known = listOf("hrsecret12345")
+        val chat = open()
+        controller.send("hi")
+        val call = nextCall()
+        call.onEvent(ChatEvent.Text("a hrsec"))
+        assertEquals("a ", controller.view.value!!.turn!!.text)
+        call.onEvent(ChatEvent.Text("tion"))
+        assertEquals("a hrsection", controller.view.value!!.turn!!.text)
+        call.outcome.complete(TurnOutcome.Finished("stop"))
+        assertEquals(ChatMessage(false, "a hrsection"), ended(chat.id, 2).conversation.messages[1])
+    }
+
+    @Test
+    fun aHeldPrefixIsFlushedWhenTheTurnEnds() {
+        known = listOf("hrsecret12345")
+        val chat = open()
+        controller.send("hi")
+        val call = nextCall()
+        call.onEvent(ChatEvent.Text("ends with hrsec"))
+        assertEquals("ends with ", controller.view.value!!.turn!!.text)
+        call.outcome.complete(TurnOutcome.Finished("stop"))
+        assertEquals(ChatMessage(false, "ends with hrsec"), ended(chat.id, 2).conversation.messages[1])
+    }
+
+    @Test
+    fun aShortWordIsNotMangled() {
+        known = listOf("hrsecret12345", "abc1234")
+        val chat = open()
+        controller.send("hi")
+        val call = nextCall()
+        call.onEvent(ChatEvent.Text("a secret word: abc"))
+        assertEquals("a secret word: abc", controller.view.value!!.turn!!.text)
+        call.onEvent(ChatEvent.Text("1234 and 12345"))
+        assertEquals("a secret word: abc1234 and 12345", controller.view.value!!.turn!!.text)
+        call.outcome.complete(TurnOutcome.Finished("stop"))
+        assertEquals(ChatMessage(false, "a secret word: abc1234 and 12345"), ended(chat.id, 2).conversation.messages[1])
+    }
+
+    @Test
+    fun aSecretAddedMidTurnIsRedactedFromThenOn() {
+        val chat = open()
+        controller.send("hi")
+        val call = nextCall()
+        call.onEvent(ChatEvent.Text("token "))
+        known = listOf("fresh-token-value")
+        call.onEvent(ChatEvent.Text("fresh-token-value ok"))
+        assertEquals("token [redacted] ok", controller.view.value!!.turn!!.text)
+        call.outcome.complete(TurnOutcome.Finished("stop"))
+        assertEquals(ChatMessage(false, "token [redacted] ok"), ended(chat.id, 2).conversation.messages[1])
+    }
+
+    @Test
+    fun anOldChatIsShownRedacted() {
+        known = listOf("hrsecret12345")
+        val old = Conversation(
+            "old",
+            "hr-old",
+            "key hrsecret12345",
+            10L,
+            listOf(ChatMessage(true, "use hrsecret12345"), ChatMessage(false, "done hrsecret12345", listOf("💻 echo hrsecret12345", "📖 read"))),
+        )
+        store.save(old)
+        val file = File(tmp.root, "chats/old.json")
+        val before = file.readText()
+        controller.open(old.id)
+        val view = awaitView { it?.conversation?.id == old.id }!!
+        assertEquals(
+            old.copy(
+                title = "key [redacted]",
+                messages = listOf(ChatMessage(true, "use [redacted]"), ChatMessage(false, "done [redacted]", listOf("💻 echo [redacted]", "📖 read"))),
+            ),
+            view.conversation,
+        )
+        assertEquals("key [redacted]", awaitList { l -> l.any { it.id == old.id } }.single().title)
+        assertEquals(before, file.readText())
+        assertEquals(old, store.load(old.id))
+    }
+
+    @Test
+    fun aTypedSecretIsSavedAsTypedButShownRedacted() {
+        known = listOf("hrsecret12345")
+        val chat = open()
+        controller.send("my key is hrsecret12345")
+        val call = nextCall()
+        val view = controller.view.value!!
+        assertEquals(listOf(ChatMessage(true, "my key is [redacted]")), view.conversation.messages)
+        assertEquals("my key is [redacted]", view.conversation.title)
+        val saved = store.load(chat.id)!!
+        assertEquals(listOf(ChatMessage(true, "my key is hrsecret12345")), saved.messages)
+        assertEquals("my key is [redacted]", saved.title)
+        call.outcome.complete(TurnOutcome.Finished("stop"))
+        ended(chat.id, 1)
+    }
+
+    @Test
+    fun aLongTitleDoesNotCutASecretOpen() {
+        known = listOf("hrsecret12345")
+        val chat = open()
+        controller.send("a message long enough to cut hrsecret12345 in two")
+        val call = nextCall()
+        assertFalse(store.load(chat.id)!!.title.contains("hrsec"))
+        call.outcome.complete(TurnOutcome.Finished("stop"))
+        ended(chat.id, 1)
     }
 }
