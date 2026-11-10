@@ -159,9 +159,20 @@ class LogBuffer(
         current.setLength(if (pair) last - 1 else last)
     }
 
-    private fun trailingSecretPrefix(): Int = known.maxOfOrNull { secret ->
-        (minOf(secret.length - 1, current.length) downTo MIN_HIDDEN).firstOrNull { size -> endsWithStartOf(secret, size) } ?: 0
-    } ?: 0
+    private fun trailingSecretPrefix(): Int {
+        var best = 0
+        for (secret in known) {
+            var size = minOf(secret.length - 1, current.length)
+            while (size >= MIN_HIDDEN && size > best) {
+                if (endsWithStartOf(secret, size)) {
+                    best = size
+                    break
+                }
+                size--
+            }
+        }
+        return best
+    }
 
     private fun endsWithStartOf(secret: String, size: Int): Boolean {
         val from = current.length - size
