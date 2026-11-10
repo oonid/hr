@@ -27,7 +27,7 @@ class StreamRedactionTest {
         assertEquals("key is ", displayText("key is hrsecret", listOf(secret)))
         assertEquals("key is ", displayText("key is hrsecret1234", listOf(secret)))
         assertEquals("", displayText("hrsec", listOf(secret)))
-        assertEquals("key is hrsecret1234", finalText("key is hrsecret1234", listOf(secret)))
+        assertEquals("key is hrsec", finalText("key is hrsec", listOf(secret)))
         assertEquals("key is hrsection", displayText("key is hrsection", listOf(secret)))
     }
 
@@ -53,5 +53,20 @@ class StreamRedactionTest {
         val secrets = listOf("abcdefgh", "fghijklm")
         assertEquals("is [redacted]", displayText("is abcdefgh", secrets))
         assertEquals("is [redacted] ", displayText("is abcdefgh fgh", secrets))
+    }
+
+    @Test
+    fun aLongHeldPrefixAtTheEndIsRedacted() {
+        val long = "abcdefghij0123456789"
+        assertEquals("it is [redacted]", finalText("it is abcdefghij", listOf(long)))
+        assertEquals("it is [redacted]", finalText("it is abcdefgh", listOf(long)))
+        assertEquals("[redacted] and [redacted]", finalText("abcdefghij0123456789 and abcdefghij012", listOf(long)))
+    }
+
+    @Test
+    fun aShortHeldPrefixAtTheEndIsKept() {
+        val long = "abcdefghij0123456789"
+        assertEquals("it is abcde", finalText("it is abcde", listOf(long)))
+        assertEquals("it is abcdefg", finalText("it is abcdefg", listOf(long)))
     }
 }
