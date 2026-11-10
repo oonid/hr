@@ -51,7 +51,7 @@ class UpdateCheck(
         synchronized(lock) {
             if (_state.value == UpdateState.Checking) return
             image = installed.value ?: return
-            if (!force && clock() - store.lastCheckedAt < DAY_MS) {
+            if (!force && (clock() - store.lastCheckedAt) in 0 until DAY_MS) {
                 _state.value = stored(image)
                 return
             }
