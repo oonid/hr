@@ -53,6 +53,7 @@ class ChatController(
         var stopped: Boolean = false,
         var failed: Boolean = false,
         var raw: String = "",
+        var rawTools: List<ToolLine> = emptyList(),
     )
 
     private class Shown(val from: Conversation, val secrets: List<String>, val copy: Conversation)
@@ -269,32 +270,25 @@ class ChatController(
             val running = active ?: return
             if (running.job !== me) return
             val turn = running.turn
-            running.turn = redactTools(when (event) {
+            running.turn = when (event) {
                 is ChatEvent.Text -> {
                     running.raw += event.delta
                     turn.copy(text = redactPrefixes(running.raw, known), approval = null, answering = false)
                 }
-                is ChatEvent.Tool -> turn.copy(tools = toolLines(turn.tools, event, known), approval = null, answering = false)
+                is ChatEvent.Tool -> {
+                    running.rawTools = toolLines(running.rawTools, event)
+                    turn.copy(approval = null, answering = false)
+                }
                 is ChatEvent.Approval -> turn.copy(approval = event, answering = false)
                 else -> return
-            }, known)
+            }.let { it.copy(tools = running.rawTools.map { line -> line.copy(label = redactPrefixes(line.label, known)) }) }
             publish(known)
         }
     }
 
-    private fun redactTools(turn: Turn, known: List<String>): Turn {
-        if (known.isEmpty()) return turn
-        var changed = false
-        val tools = turn.tools.map { line ->
-            val label = redactPrefixes(line.label, known)
-            if (label == line.label) line else line.copy(label = label).also { changed = true }
-        }
-        return if (changed) turn.copy(tools = tools) else turn
-    }
-
-    private fun toolLines(lines: List<ToolLine>, event: ChatEvent.Tool, known: List<String>): List<ToolLine> {
+    private fun toolLines(lines: List<ToolLine>, event: ChatEvent.Tool): List<ToolLine> {
         val at = lines.indexOfFirst { it.callId == event.callId }
-        val label = redactPrefixes(event.label, known)
+        val label = event.label
         return when {
             event.running && at < 0 -> lines + ToolLine(event.callId, label, true)
             event.running -> lines.toMutableList().also { it[at] = ToolLine(event.callId, label, true) }
@@ -313,7 +307,7 @@ class ChatController(
             val clears = !running.failed && (running.stopped || outcome == null || outcome is TurnOutcome.Finished)
             val pending = (running.unresolved + listOfNotNull(running.turnId.takeUnless { clears })).takeLast(MAX_PENDING)
             val text = redactPrefixes(running.raw, known).trim()
-            val tools = running.turn.tools.map { redactPrefixes(it.label, known) }
+            val tools = running.rawTools.map { redactPrefixes(it.label, known) }
             val reply = if (text.isEmpty() && tools.isEmpty()) emptyList() else listOf(ChatMessage(false, text, tools, interrupted))
             val conversation = if (reply.isEmpty() && pending == running.conversation.pendingTurns) {
                 running.conversation

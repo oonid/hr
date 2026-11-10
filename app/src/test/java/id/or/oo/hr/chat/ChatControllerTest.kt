@@ -1009,6 +1009,25 @@ class ChatControllerTest {
     }
 
     @Test
+    fun aToolLabelIsRedactedFromItsRawTextOnEveryEvent() {
+        known = listOf("redacted-token-1")
+        val chat = open()
+        controller.send("go")
+        val call = nextCall()
+        call.onEvent(ChatEvent.Tool("c1", "curl redacted-token-1", true))
+        val first = controller.view.value!!.turn!!.tools.map { it.label }
+        assertEquals(listOf("curl [redacted]"), first)
+        call.onEvent(ChatEvent.Text("a"))
+        assertEquals(first, controller.view.value!!.turn!!.tools.map { it.label })
+        call.onEvent(ChatEvent.Tool("c2", "ls", true))
+        assertEquals(listOf("curl [redacted]", "ls"), controller.view.value!!.turn!!.tools.map { it.label })
+        call.onEvent(ChatEvent.Text("b"))
+        assertEquals(listOf("curl [redacted]", "ls"), controller.view.value!!.turn!!.tools.map { it.label })
+        call.outcome.complete(TurnOutcome.Finished("stop"))
+        assertEquals(listOf("curl [redacted]", "ls"), persisted(ended(chat.id, 2))!!.messages[1].tools)
+    }
+
+    @Test
     fun aSecretSplitAcrossDeltasIsNeverShown() {
         known = listOf("hrsecret12345")
         val chat = open()
