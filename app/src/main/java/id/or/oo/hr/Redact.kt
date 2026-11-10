@@ -2,7 +2,6 @@ package id.or.oo.hr
 
 const val MIN_SECRET_LENGTH = 8
 
-
 fun redactPrefixes(text: String, secrets: List<String>): String {
     val runs = mutableListOf<IntRange>()
     for (secret in secrets.distinct()) {
