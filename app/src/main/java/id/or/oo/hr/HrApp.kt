@@ -13,6 +13,7 @@ import id.or.oo.hr.gateway.LogBuffer
 import id.or.oo.hr.image.GhcrRegistry
 import id.or.oo.hr.image.ImageStore
 import id.or.oo.hr.image.imageInUse
+import id.or.oo.hr.image.UpdateCheck
 import id.or.oo.hr.image.UrlHttp
 import id.or.oo.hr.profile.ProfileStore
 import id.or.oo.hr.profile.readStatus
@@ -92,6 +93,26 @@ class HrApp : Application(), ProotHost, SessionHost {
             files,
             imageScope,
             inUse = { imageInUse(sessions.running.value.isNotEmpty(), gateway.state.value) },
+        )
+    }
+
+    val updates: UpdateCheck by lazy {
+        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+        UpdateCheck(
+            GhcrRegistry(UrlHttp()),
+            images.installed,
+            object : UpdateCheck.Store {
+                override var lastCheckedAt: Long
+                    get() = prefs.getLong(UPDATE_CHECKED_AT, 0L)
+                    set(value) = prefs.edit().putLong(UPDATE_CHECKED_AT, value).apply()
+                override var lastLatestTag: String?
+                    get() = prefs.getString(UPDATE_LATEST_TAG, null)
+                    set(value) = prefs.edit().putString(UPDATE_LATEST_TAG, value).apply()
+                override var lastLatestVersion: String?
+                    get() = prefs.getString(UPDATE_LATEST_VERSION, null)
+                    set(value) = prefs.edit().putString(UPDATE_LATEST_VERSION, value).apply()
+            },
+            imageScope,
         )
     }
 
@@ -179,5 +200,8 @@ class HrApp : Application(), ProotHost, SessionHost {
         const val PREFS = "hr_prefs"
         private const val BOOTSTRAP_VERSION = 1
         private const val KEEP_AWAKE = "keep_cpu_awake"
+        private const val UPDATE_CHECKED_AT = "update_checked_at"
+        private const val UPDATE_LATEST_TAG = "update_latest_tag"
+        private const val UPDATE_LATEST_VERSION = "update_latest_version"
     }
 }
