@@ -1,7 +1,7 @@
 package id.or.oo.hr.setup
 
-import id.or.oo.hr.chat.redactPrefixes
 import id.or.oo.hr.image.Http
+import id.or.oo.hr.redactPrefixes
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException

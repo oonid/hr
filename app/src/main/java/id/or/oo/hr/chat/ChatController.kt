@@ -1,6 +1,7 @@
 package id.or.oo.hr.chat
 
 import id.or.oo.hr.gateway.GatewayState
+import id.or.oo.hr.redactPrefixes
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
