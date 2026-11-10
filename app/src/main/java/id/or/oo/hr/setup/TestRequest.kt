@@ -6,6 +6,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
 import java.net.ConnectException
+import java.net.SocketTimeoutException
 
 sealed interface TestResult {
     data class Answered(val text: String) : TestResult
@@ -33,8 +34,10 @@ class TestRequest(
             http.post(url, mapOf("Authorization" to "Bearer ${key()}", "Content-Type" to "application/json"), body)
         } catch (e: ConnectException) {
             return TestResult.NoGateway
+        } catch (e: SocketTimeoutException) {
+            return TestResult.Failed(TIMEOUT)
         } catch (e: IOException) {
-            return TestResult.Failed(e.message ?: e.javaClass.simpleName)
+            return TestResult.Failed(e.message?.let { redact(it, secrets()) } ?: e.javaClass.simpleName)
         }
         if (response.code >= 400) return TestResult.Rejected(response.code, redact(response.body, secrets()).take(BODY_LIMIT))
         val text = answer(response.body)
@@ -51,5 +54,7 @@ class TestRequest(
     companion object {
         const val URL = "http://127.0.0.1:8642/p/android/v1/chat/completions"
         private const val BODY_LIMIT = 500
+        private const val TIMEOUT = "the gateway did not answer in time; the model endpoint may be unreachable" +
+            " — check the provider's base URL and key"
     }
 }

@@ -131,6 +131,7 @@ class ChatClient(
     }
 
     private fun brokenReason(e: IOException): String {
+        if (e is SocketTimeoutException) return TIMEOUT
         val message = e.message
         return if (message.isNullOrBlank()) LOST else redact(message, secrets())
     }
@@ -251,6 +252,7 @@ class ChatClient(
     private companion object {
         const val EARLY = "the reply ended early"
         const val LOST = "the connection to the gateway was lost"
+        const val TIMEOUT = "Hermes did not answer in time; the model endpoint may be unreachable"
         const val RUN_PREFIX = "chat"
         const val SCOPE_SEPARATOR = "\u0000"
         const val PATH_SAFE = "-._~:"

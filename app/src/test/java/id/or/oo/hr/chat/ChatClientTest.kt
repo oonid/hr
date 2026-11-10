@@ -540,6 +540,21 @@ class ChatClientTest {
     }
 
     @Test
+    fun aChatTimeoutSaysWhatToCheck() {
+        val release = CountDownLatch(1)
+        server.stream = { x ->
+            x.eventStreamHead()
+            release.await(5, TimeUnit.SECONDS)
+        }
+        val outcome = send(client(readTimeoutMs = 200))
+        release.countDown()
+        assertEquals(
+            TurnOutcome.Broken("Hermes did not answer in time; the model endpoint may be unreachable", lost = false),
+            outcome,
+        )
+    }
+
+    @Test
     fun aReadTimeoutIsNotALostConnection() {
         server.stream = { x ->
             x.eventStreamHead()
@@ -548,7 +563,7 @@ class ChatClientTest {
         }
         val thrown = SocketTimeoutException("Read timed out")
         val outcome = runBlocking { client().send("s", "t1", "hi") { if (it is ChatEvent.Text) throw thrown } }
-        assertEquals(TurnOutcome.Broken("Read timed out", lost = false), outcome)
+        assertEquals(TurnOutcome.Broken("Hermes did not answer in time; the model endpoint may be unreachable", lost = false), outcome)
     }
 
     @Test
