@@ -1224,4 +1224,107 @@ class ImageStoreTest {
         gate!!.complete(Unit)
         store.awaitIdle()
     }
+
+    @Test
+    fun aSwitchInterruptedDuringTheRestartIsReported() {
+        writeRecord(*arrayOf("reference=ghcr.io/oonid/hermes-agent:v2", "build_tag=v2", "alias=hermes-v2", "starting.alias=hermes-v2") + previousRecord("hermes", "v1"))
+        files.rootfs("hermes-v2").mkdirs()
+        files.rootfs("hermes").mkdirs()
+
+        val store = store()
+
+        assertEquals(store.installed.value, store.unverified.value)
+        assertEquals("hermes-v2", store.unverified.value?.alias)
+        assertNull(installedV1("starting.alias=hermes-v2").unverified.value)
+    }
+
+    @Test
+    fun aStartingKeyNamingAnotherImageIsDroppedOnTheNextCommit() {
+        val store = installedV1("starting.alias=hermes-v0")
+        assertNull(store.unverified.value)
+
+        store.update(v2)
+        store.awaitIdle()
+
+        assertFalse(files.imageRecord.readText().contains("hermes-v0"))
+    }
+
+    @Test
+    fun reachingRunningClearsTheNotice() {
+        val store = installedV1("starting.alias=hermes")
+        assertEquals("hermes", store.unverified.value?.alias)
+
+        store.confirmRunning()
+
+        assertNull(store.unverified.value)
+        assertFalse(files.imageRecord.readText().contains("starting."))
+        assertEquals("hermes", store.installed.value?.alias)
+        assertNull(store().unverified.value)
+    }
+
+    @Test
+    fun aFinishedUpdateLeavesNoStartingKey() {
+        val recordDuringRestart = CopyOnWriteArrayList<String>()
+        onRestart = { recordDuringRestart += files.imageRecord.readText() }
+        val store = installedV1()
+
+        store.update(v2)
+        store.awaitIdle()
+        assertTrue(store.operation.value!!.succeeded)
+        assertFalse(files.imageRecord.readText().contains("starting."))
+
+        restartResults += listOf("port 8642 in use", null)
+        store.update(v3)
+        store.awaitIdle()
+        assertEquals("hermes-v2", store.installed.value?.alias)
+        assertFalse(files.imageRecord.readText().contains("starting."))
+
+        restartResults += listOf("port 8642 in use", "the gateway stopped with exit code 1")
+        store.update(v3)
+        store.awaitIdle()
+        assertEquals("hermes-v2", store.installed.value?.alias)
+        assertFalse(files.imageRecord.readText().contains("starting."))
+
+        store.switchBack()
+        store.awaitIdle()
+        assertEquals("hermes-v3", store.installed.value?.alias)
+        assertTrue(store.operation.value!!.succeeded)
+        assertFalse(files.imageRecord.readText().contains("starting."))
+        assertNull(store.unverified.value)
+
+        assertEquals(
+            listOf("hermes-v2", "hermes-v3", null, "hermes-v3", null, "hermes-v3"),
+            recordDuringRestart.map { Regex("starting.alias=(\\S+)").find(it)?.groupValues?.get(1) },
+        )
+    }
+
+    @Test
+    fun confirmRunningWaitsForTheOperation() {
+        lateinit var store: ImageStore
+        val duringRestart = CopyOnWriteArrayList<String?>()
+        onRestart = {
+            store.confirmRunning()
+            duringRestart += Regex("starting.alias=(\\S+)").find(files.imageRecord.readText())?.groupValues?.get(1)
+            duringRestart += store.unverified.value?.alias
+        }
+        store = installedV1()
+
+        store.update(v2)
+        store.awaitIdle()
+
+        assertEquals(listOf("hermes-v2", "hermes-v2"), duringRestart)
+        assertNull(store.unverified.value)
+    }
+
+    @Test
+    fun confirmRunningWithNothingToClearWritesNothing() {
+        val store = installedV1()
+        val before = files.imageRecord.readText()
+        files.imageRecord.setLastModified(1_000)
+
+        store.confirmRunning()
+
+        assertEquals(before, files.imageRecord.readText())
+        assertEquals(1_000, files.imageRecord.lastModified())
+    }
 }

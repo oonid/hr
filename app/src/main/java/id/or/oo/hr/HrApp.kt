@@ -9,6 +9,7 @@ import id.or.oo.hr.chat.ChatController
 import id.or.oo.hr.chat.ConversationStore
 import id.or.oo.hr.gateway.GatewayController
 import id.or.oo.hr.gateway.GatewayLaunch
+import id.or.oo.hr.gateway.GatewayState
 import id.or.oo.hr.gateway.LocalGatewayProbe
 import id.or.oo.hr.gateway.LogBuffer
 import id.or.oo.hr.gateway.active
@@ -41,6 +42,7 @@ import id.or.oo.pr.session.SessionManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import java.io.File
 import java.net.Inet6Address
 
@@ -132,7 +134,11 @@ class HrApp : Application(), ProotHost, SessionHost {
             profiles,
             gatewayLog,
             gatewayScope,
-        )
+        ).also { controller ->
+            gatewayScope.launch {
+                controller.state.collect { if (it is GatewayState.Running) images.confirmRunning() }
+            }
+        }
     }
 
     val chat: ChatController by lazy {

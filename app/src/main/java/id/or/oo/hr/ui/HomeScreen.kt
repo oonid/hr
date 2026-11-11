@@ -46,6 +46,8 @@ fun HomeScreen(app: HrApp, actions: HrActions, modifier: Modifier, open: (Screen
     val operation by app.images.operation.collectAsStateWithLifecycle()
     val update by app.updates.state.collectAsStateWithLifecycle()
     val interrupted by app.images.interrupted.collectAsStateWithLifecycle()
+    val unverified by app.images.unverified.collectAsStateWithLifecycle()
+    val previous by app.images.previous.collectAsStateWithLifecycle()
     val state by app.gateway.state.collectAsStateWithLifecycle()
     val revision by app.gatewayLog.revision.collectAsStateWithLifecycle()
     val recent = remember(revision) { app.gatewayLog.tail(RECENT_LINES) }
@@ -69,11 +71,14 @@ fun HomeScreen(app: HrApp, actions: HrActions, modifier: Modifier, open: (Screen
             operation,
             update,
             interrupted,
+            unverified,
+            previous,
             onInstall = { app.images.install() },
             onDismiss = { app.images.dismiss() },
             onCheck = { app.updates.check(force = true) },
             onUpdate = { app.images.update(it) },
             onRemoveInterrupted = { app.images.removeInterrupted() },
+            onSwitchBack = { app.images.switchBack() },
         )
         if (installed != null) {
             GatewayCard(state, now, canStart, onStart = actions.startGateway, onStop = { app.gateway.stop() })
@@ -103,11 +108,14 @@ private fun ImageCard(
     operation: ImageStore.Operation?,
     update: UpdateState,
     interrupted: ImageBuild?,
+    unverified: InstalledImage?,
+    previous: InstalledImage?,
     onInstall: () -> Unit,
     onDismiss: () -> Unit,
     onCheck: () -> Unit,
     onUpdate: (ImageBuild) -> Unit,
     onRemoveInterrupted: () -> Unit,
+    onSwitchBack: () -> Unit,
 ) {
     var confirmUpdate by rememberSaveable { mutableStateOf(false) }
     val running = operation?.running == true
@@ -146,6 +154,10 @@ private fun ImageCard(
                     Button(onClick = { onUpdate(interrupted) }) { Text("Retry") }
                     TextButton(onClick = onRemoveInterrupted) { Text("Remove") }
                 }
+            }
+            if (unverified != null && !running) {
+                Text("hr stopped before ${unverified.buildTag} was seen running.")
+                if (previous != null) OutlinedButton(onClick = onSwitchBack) { Text("Switch back") }
             }
             if (installed == null && !running) {
                 Button(onClick = onInstall) { Text("Install") }
