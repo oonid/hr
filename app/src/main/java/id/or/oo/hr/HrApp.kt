@@ -99,7 +99,7 @@ class HrApp : Application(), ProotHost, SessionHost {
             restart = GatewayRestart { ControllerRestart(gateway.state, gateway::stop, gateway::start).restart() },
             gatewayActive = { gateway.state.value.active },
             stopGateway = { gateway.stop() },
-            sessionsBlocking = { sessions.running.value.any { it != Hermes.GATEWAY_KEY } || sessions.tasks.value.isNotEmpty() },
+            sessionsBlocking = { sessions.running.value.any { it != Hermes.GATEWAY_KEY } || sessions.tasks.value.isNotEmpty() || setup.step.value.busy },
             freeBytes = { StatFs(filesDir.path).availableBytes },
         )
     }

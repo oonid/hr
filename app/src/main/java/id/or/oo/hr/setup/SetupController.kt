@@ -18,6 +18,8 @@ fun interface GatewayRestart {
 }
 
 sealed interface SetupStep {
+    val busy: Boolean get() = this == Saving || this == Testing
+
     data object Choose : SetupStep
     data class ChatGpt(val login: LoginState, val models: List<String>?, val loadingModels: Boolean) : SetupStep
     data object Saving : SetupStep
@@ -199,8 +201,6 @@ class SetupController(
             if (job === me) mutableStep.value = next
         }
     }
-
-    private val SetupStep.busy get() = this == SetupStep.Saving || this == SetupStep.Testing
 
     private companion object {
         const val CODEX = "openai-codex"

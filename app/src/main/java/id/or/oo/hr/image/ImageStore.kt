@@ -269,6 +269,7 @@ class ImageStore(
 
     private suspend fun removingPrevious(): Boolean {
         if (!olderSettled()) return false
+        if (blocked()) return false
         val previous = snapshot().previous ?: return false
         if (!removed(previous.alias)) return false
         commit(snapshot().copy(previous = null))
@@ -277,6 +278,7 @@ class ImageStore(
     }
 
     private suspend fun removingInterrupted(): Boolean {
+        if (blocked()) return false
         val known = snapshot()
         val pending = known.pending?.takeIf { interruptedOf(known) != null } ?: return false
         if (onDisk(pending.alias) && !removed(pending.alias)) return false
@@ -411,7 +413,7 @@ class ImageStore(
         val EMPTY = Record(null, null, null, null)
         const val MAX_LINES = 200
         const val IN_USE = "Stop the gateway and end the terminal before removing the image."
-        const val SESSIONS_BLOCKING = "End the terminal and wait for the login to finish before updating."
+        const val SESSIONS_BLOCKING = "End the terminal and wait for Setup and the login to finish before updating."
         const val MIN_FREE_BYTES = 2L * 1024 * 1024 * 1024
         const val MB = 1_048_576L
         const val ALIAS_PREFIX = "${Hermes.CONTAINER}-"
