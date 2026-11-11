@@ -41,7 +41,13 @@ class ImageStore(
 
     private data class Older(val alias: String, val tag: String)
 
-    private data class Record(val current: InstalledImage?, val previous: InstalledImage?, val pending: Pending?, val older: Older?)
+    private data class Record(
+        val current: InstalledImage?,
+        val previous: InstalledImage?,
+        val pending: Pending?,
+        val older: Older?,
+        val starting: String? = null,
+    )
 
     private val lock = Any()
 
@@ -57,6 +63,9 @@ class ImageStore(
 
     private val _interrupted = MutableStateFlow(interruptedOf(record))
     val interrupted: StateFlow<ImageBuild?> = _interrupted
+
+    private val _unverified = MutableStateFlow(unverifiedOf(record))
+    val unverified: StateFlow<InstalledImage?> = _unverified
 
     private val _operation = MutableStateFlow<Operation?>(null)
     val operation: StateFlow<Operation?> = _operation
@@ -108,6 +117,14 @@ class ImageStore(
             return false
         }
         start(Kind.Remove) { removing() }
+    }
+
+    fun confirmRunning() {
+        synchronized(lock) {
+            if (_operation.value?.running == true || record.starting == null) return
+            commit(record.copy(starting = null))
+            _unverified.value = null
+        }
     }
 
     fun dismiss(): Boolean = synchronized(lock) {
@@ -212,10 +229,11 @@ class ImageStore(
         val older = before.previous?.takeIf { it.alias != target.alias }?.let { Older(it.alias, it.buildTag) } ?: before.older
         val pending = before.pending?.takeIf { it.alias != target.alias }
         val wasActive = gatewayActive()
-        commit(Record(target, old, pending, older))
+        commit(Record(target, old, pending, older, starting = target.alias))
         publish()
         val reason = restartGateway()
         val succeeded = if (reason == null) {
+            commit(snapshot().copy(starting = null))
             if (!wasActive) stopGateway()
             append(
                 if (back) {
@@ -343,7 +361,10 @@ class ImageStore(
         _installed.value = now.current
         _previous.value = now.previous
         _interrupted.value = interruptedOf(now)
+        _unverified.value = unverifiedOf(now)
     }
+
+    private fun unverifiedOf(record: Record): InstalledImage? = record.current?.takeIf { it.alias == record.starting }
 
     private fun interruptedOf(record: Record): ImageBuild? =
         record.pending?.takeIf { it.alias != record.current?.alias && it.alias != record.previous?.alias }?.build
@@ -360,7 +381,8 @@ class ImageStore(
             Older(alias, properties.getProperty(OLDER + BUILD_TAG) ?: return@let null)
         }
         val (current, previous) = if (recorded != null) recorded to kept else kept to null
-        return Record(current, previous, pending, older)
+        val starting = properties.getProperty(STARTING + ALIAS)?.takeIf { it == current?.alias }
+        return Record(current, previous, pending, older, starting)
     }
 
     private fun present(alias: String) = files.rootfs(alias).isDirectory && !marker(alias).exists()
@@ -394,6 +416,7 @@ class ImageStore(
                     setProperty(OLDER + ALIAS, it.alias)
                     setProperty(OLDER + BUILD_TAG, it.tag)
                 }
+                next.starting?.let { setProperty(STARTING + ALIAS, it) }
             }
             val text = StringWriter().also { properties.store(it, null) }.toString()
             writePrivate(files.imageRecord, text)
@@ -426,5 +449,6 @@ class ImageStore(
         const val PREVIOUS = "previous."
         const val PENDING = "pending."
         const val OLDER = "older."
+        const val STARTING = "starting."
     }
 }
