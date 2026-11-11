@@ -180,6 +180,7 @@ class ImageStore(
         commit(Record(image, null, null, null))
         publish()
         append("Installed ${build.tag}.")
+        clearCache()
         return true
     }
 
@@ -208,7 +209,9 @@ class ImageStore(
             append("pr-cli exited with $code.")
             return false
         }
-        return switchTo(InstalledImage(reference, latest.tag, latest.version, clock(), target), back = false)
+        val switched = switchTo(InstalledImage(reference, latest.tag, latest.version, clock(), target), back = false)
+        if (switched) clearCache()
+        return switched
     }
 
     private suspend fun switchingBack(): Boolean {
@@ -331,7 +334,13 @@ class ImageStore(
         }
         commit(EMPTY)
         append("Removed. The profile in hr's files is kept.")
+        clearCache()
         return true
+    }
+
+    private suspend fun clearCache() {
+        val code = command.run(listOf("clear-cache"), ::append)
+        if (code != 0) append("pr-cli exited with $code.")
     }
 
     private fun leftovers(): List<String> {

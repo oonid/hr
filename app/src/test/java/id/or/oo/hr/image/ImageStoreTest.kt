@@ -31,6 +31,7 @@ class ImageStoreTest {
     private val build = ImageBuild("v0.22.3-pab570a0b-gateway", "v0.22.3")
     private val calls = CopyOnWriteArrayList<List<String>>()
     private var exitCode = 0
+    private var cacheExitCode = 0
     private var inUse = false
     private var gate: CompletableDeferred<Unit>? = null
     private var registry = ImageRegistry { build }
@@ -48,7 +49,7 @@ class ImageStoreTest {
                 marker(args[1]).delete()
             }
         }
-        exitCode
+        if (args.first() == "clear-cache") cacheExitCode else exitCode
     }
 
     private val restartResults = ArrayDeque<String?>()
@@ -105,7 +106,7 @@ class ImageStoreTest {
         store.awaitIdle()
 
         assertEquals(
-            listOf(listOf("install", "ghcr.io/oonid/hermes-agent:v0.22.3-pab570a0b-gateway", "--override-alias", "hermes")),
+            listOf(listOf("install", "ghcr.io/oonid/hermes-agent:v0.22.3-pab570a0b-gateway", "--override-alias", "hermes"), listOf("clear-cache")),
             calls,
         )
         val installed = InstalledImage("ghcr.io/oonid/hermes-agent:v0.22.3-pab570a0b-gateway", build.tag, "v0.22.3", 1_700_000_000_000, "hermes")
@@ -180,7 +181,7 @@ class ImageStoreTest {
         store.remove()
         store.awaitIdle()
 
-        assertEquals(listOf(listOf("remove", "hermes-v1")), calls)
+        assertEquals(listOf(listOf("remove", "hermes-v1"), listOf("clear-cache")), calls)
         assertNull(store.installed.value)
     }
 
@@ -224,7 +225,7 @@ class ImageStoreTest {
         gate!!.complete(Unit)
         store.awaitIdle()
 
-        assertEquals(1, calls.size)
+        assertEquals(listOf("install", "clear-cache"), calls.map { it.first() })
     }
 
     @Test
@@ -234,7 +235,7 @@ class ImageStoreTest {
         store.awaitIdle()
 
         assertFalse(store.install())
-        assertEquals(1, calls.size)
+        assertEquals(listOf("install", "clear-cache"), calls.map { it.first() })
     }
 
     @Test
@@ -250,7 +251,7 @@ class ImageStoreTest {
         assertTrue(store.remove())
         store.awaitIdle()
 
-        assertEquals(listOf("remove", "hermes"), calls.last())
+        assertEquals(listOf(listOf("remove", "hermes"), listOf("clear-cache")), calls.takeLast(2))
         assertNull(store.installed.value)
         assertFalse(files.imageRecord.exists())
         assertFalse(store.containerExists)
@@ -268,7 +269,7 @@ class ImageStoreTest {
         assertFalse(store.remove())
 
         assertEquals(listOf("Stop the gateway and end the terminal before removing the image."), store.operation.value!!.lines)
-        assertEquals(1, calls.size)
+        assertEquals(listOf("install", "clear-cache"), calls.map { it.first() })
     }
 
     @Test
@@ -404,7 +405,7 @@ class ImageStoreTest {
         assertTrue(store.update(v2))
         store.awaitIdle()
 
-        assertEquals(listOf(listOf("install", "ghcr.io/oonid/hermes-agent:v2", "--override-alias", "hermes-v2")), calls)
+        assertEquals(listOf(listOf("install", "ghcr.io/oonid/hermes-agent:v2", "--override-alias", "hermes-v2"), listOf("clear-cache")), calls)
         val updated = InstalledImage("ghcr.io/oonid/hermes-agent:v2", "v2", "v0.23.0", 1_700_000_000_000, "hermes-v2")
         val old = InstalledImage("ghcr.io/oonid/hermes-agent:v1", "v1", "v0.22.3", 1, "hermes")
         assertEquals(updated, store.installed.value)
@@ -668,7 +669,7 @@ class ImageStoreTest {
         store.update(v2)
         store.awaitIdle()
 
-        assertEquals(listOf(listOf("install", "ghcr.io/oonid/hermes-agent:v2", "--override-alias", "hermes-v2")), calls)
+        assertEquals(listOf(listOf("install", "ghcr.io/oonid/hermes-agent:v2", "--override-alias", "hermes-v2"), listOf("clear-cache")), calls)
         assertEquals("hermes-v2", store.installed.value?.alias)
     }
 
@@ -684,6 +685,7 @@ class ImageStoreTest {
             listOf(
                 listOf("remove", "hermes-v2"),
                 listOf("install", "ghcr.io/oonid/hermes-agent:v3", "--override-alias", "hermes-v3"),
+                listOf("clear-cache"),
             ),
             calls,
         )
@@ -747,6 +749,7 @@ class ImageStoreTest {
             listOf(
                 listOf("install", "ghcr.io/oonid/hermes-agent:v3", "--override-alias", "hermes-v3"),
                 listOf("remove", "hermes-v0"),
+                listOf("clear-cache"),
             ),
             calls,
         )
@@ -837,6 +840,7 @@ class ImageStoreTest {
             listOf(
                 listOf("remove", "hermes-v1"),
                 listOf("install", "ghcr.io/oonid/hermes-agent:v3", "--override-alias", "hermes-v3"),
+                listOf("clear-cache"),
             ),
             calls,
         )
@@ -885,7 +889,7 @@ class ImageStoreTest {
         store.update(v3)
         store.awaitIdle()
 
-        assertEquals("install", calls.single().first())
+        assertEquals(listOf("install", "clear-cache"), calls.map { it.first() })
         assertFalse(files.imageRecord.readText().contains("older."))
     }
 
@@ -916,7 +920,7 @@ class ImageStoreTest {
         store.update(v2)
         store.awaitIdle()
 
-        assertEquals(listOf("install"), calls.map { it.first() })
+        assertEquals(listOf("install", "clear-cache"), calls.map { it.first() })
         assertTrue(files.rootfs("hermes").isDirectory)
         assertEquals("hermes", store.previous.value?.alias)
         assertFalse(files.imageRecord.readText().contains("older."))
@@ -1103,10 +1107,10 @@ class ImageStoreTest {
                 listOf("remove", "hermes-v1"),
                 listOf("remove", "hermes-v0"),
             ),
-            calls.toSet(),
+            calls.dropLast(1).toSet(),
         )
-        assertEquals(5, calls.size)
-        assertEquals(listOf("remove", "hermes-v2"), calls.last())
+        assertEquals(6, calls.size)
+        assertEquals(listOf(listOf("remove", "hermes-v2"), listOf("clear-cache")), calls.takeLast(2))
         assertFalse(files.imageRecord.exists())
         assertNull(store.installed.value)
         assertNull(store.previous.value)
@@ -1326,5 +1330,95 @@ class ImageStoreTest {
 
         assertEquals(before, files.imageRecord.readText())
         assertEquals(1_000, files.imageRecord.lastModified())
+    }
+
+    private val clearCache = listOf("clear-cache")
+
+    @Test
+    fun anInstallClearsTheDownloadCache() {
+        val store = store()
+
+        store.install()
+        store.awaitIdle()
+
+        assertEquals(listOf("install", "clear-cache"), calls.map { it.first() })
+        assertEquals(clearCache, calls.last())
+        assertEquals("Installed v0.22.3-pab570a0b-gateway.", store.lastLine())
+        assertTrue(store.operation.value!!.succeeded)
+    }
+
+    @Test
+    fun anUpdateThatDownloadedClearsTheCache() {
+        val store = installedV1()
+
+        store.update(v2)
+        store.awaitIdle()
+
+        assertEquals(listOf("install", "clear-cache"), calls.map { it.first() })
+        assertEquals(listOf("restart"), events)
+        assertEquals("Updated to v2. The previous image (v1) is kept until you remove it.", store.lastLine())
+        assertTrue(store.operation.value!!.succeeded)
+    }
+
+    @Test
+    fun anUpdateReusingAContainerDoesNotClearIt() {
+        restartResults += listOf("port 8642 in use", null)
+        val store = installedV1()
+        store.update(v2)
+        store.awaitIdle()
+        assertFalse(calls.contains(clearCache))
+        resetCounts()
+
+        store.update(v2)
+        store.awaitIdle()
+
+        assertTrue(store.operation.value!!.succeeded)
+        assertTrue(calls.isEmpty())
+    }
+
+    @Test
+    fun aFailedCacheClearDoesNotFailTheUpdate() {
+        cacheExitCode = 3
+        val store = installedV1()
+
+        store.update(v2)
+        store.awaitIdle()
+
+        assertEquals(clearCache, calls.last())
+        assertEquals("pr-cli exited with 3.", store.lastLine())
+        assertTrue(store.operation.value!!.succeeded)
+        assertEquals("hermes-v2", store.installed.value?.alias)
+    }
+
+    @Test
+    fun aFailedInstallKeepsTheCache() {
+        exitCode = 1
+        store().apply {
+            install()
+            awaitIdle()
+        }
+        installedV1().apply {
+            update(v2)
+            awaitIdle()
+        }
+
+        assertEquals(listOf("install", "install"), calls.map { it.first() })
+    }
+
+    @Test
+    fun removeClearsTheCacheAfterwardsAndOnlyWhenItSucceeded() {
+        val store = installedV1()
+        exitCode = 1
+        store.remove()
+        store.awaitIdle()
+        assertFalse(calls.contains(clearCache))
+        exitCode = 0
+        calls.clear()
+
+        store.remove()
+        store.awaitIdle()
+
+        assertEquals(listOf(listOf("remove", "hermes"), clearCache), calls)
+        assertTrue(store.operation.value!!.succeeded)
     }
 }
