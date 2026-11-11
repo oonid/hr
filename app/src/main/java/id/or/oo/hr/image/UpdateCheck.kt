@@ -40,6 +40,11 @@ class UpdateCheck(
         scope.launch {
             installed.collect { image ->
                 synchronized(lock) {
+                    if (image == null) {
+                        store.lastLatestTag = null
+                        store.lastLatestVersion = null
+                        store.lastCheckedAt = 0L
+                    }
                     if (_state.value != UpdateState.Checking) _state.value = stored(image)
                 }
             }
