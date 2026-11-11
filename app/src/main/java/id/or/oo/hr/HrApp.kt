@@ -103,6 +103,7 @@ class HrApp : Application(), ProotHost, SessionHost {
             stopGateway = { gateway.stop() },
             sessionsBlocking = { sessions.running.value.any { it != Hermes.GATEWAY_KEY } || sessions.tasks.value.isNotEmpty() || setup.step.value.busy },
             freeBytes = { StatFs(filesDir.path).availableBytes },
+            gatewayRunning = { gateway.state.value is GatewayState.Running },
         )
     }
 

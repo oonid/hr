@@ -31,6 +31,7 @@ class ImageStore(
     private val stopGateway: () -> Unit,
     private val sessionsBlocking: () -> Boolean,
     private val freeBytes: () -> Long,
+    private val gatewayRunning: () -> Boolean,
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
     enum class Kind { Install, Remove, Update, SwitchBack }
@@ -54,6 +55,9 @@ class ImageStore(
     private var record = load()
 
     private var restarting = false
+
+    @Volatile
+    private var switchUnsettled = false
 
     private val _installed = MutableStateFlow(record.current)
     val installed: StateFlow<InstalledImage?> = _installed
@@ -121,8 +125,19 @@ class ImageStore(
 
     fun confirmRunning() {
         synchronized(lock) {
-            if (_operation.value?.running == true || record.starting == null) return
-            commit(record.copy(starting = null))
+            if (_operation.value?.running == true) return
+            clearStarting()
+        }
+    }
+
+    private fun clearStarting() {
+        synchronized(lock) {
+            if (record.starting == null) return
+            try {
+                commit(record.copy(starting = null))
+            } catch (e: Exception) {
+                return
+            }
             _unverified.value = null
         }
     }
@@ -149,6 +164,7 @@ class ImageStore(
     private fun start(kind: Kind, work: suspend () -> Boolean): Boolean {
         if (_operation.value?.running == true) return false
         _operation.value = Operation(kind, emptyList(), running = true)
+        switchUnsettled = false
         scope.launch {
             var succeeded = false
             try {
@@ -158,6 +174,7 @@ class ImageStore(
             } catch (e: Exception) {
                 append("ERROR: ${e.message ?: e.javaClass.simpleName}")
             } finally {
+                if (!switchUnsettled && gatewayRunning()) clearStarting()
                 publish()
                 _containerPresent.value = containerOnDisk()
                 _operation.update { it?.copy(running = false, succeeded = succeeded) }
@@ -210,7 +227,7 @@ class ImageStore(
             return false
         }
         val switched = switchTo(InstalledImage(reference, latest.tag, latest.version, clock(), target), back = false)
-        if (switched) clearCache()
+        clearCache()
         return switched
     }
 
@@ -234,7 +251,9 @@ class ImageStore(
         val wasActive = gatewayActive()
         commit(Record(target, old, pending, older, starting = target.alias))
         publish()
+        switchUnsettled = true
         val reason = restartGateway()
+        switchUnsettled = false
         val succeeded = if (reason == null) {
             commit(snapshot().copy(starting = null))
             if (!wasActive) stopGateway()
@@ -339,7 +358,14 @@ class ImageStore(
     }
 
     private suspend fun clearCache() {
-        val code = command.run(listOf("clear-cache"), ::append)
+        val code = try {
+            command.run(listOf("clear-cache")) {}
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            append("Couldn't clear the download cache: ${e.message ?: e.javaClass.simpleName}")
+            return
+        }
         if (code != 0) append("pr-cli exited with $code.")
     }
 
