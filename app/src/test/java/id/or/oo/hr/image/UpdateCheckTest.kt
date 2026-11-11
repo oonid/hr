@@ -140,6 +140,22 @@ class UpdateCheckTest {
     }
 
     @Test
+    fun removingTheImageForgetsTheStoredLatest() {
+        store.lastCheckedAt = now
+        store.lastLatestTag = v1.tag
+        store.lastLatestVersion = v1.version
+        val check = check()
+        installed.value = null
+        installed.value = image(v2)
+        assertEquals(UpdateState.Unknown, check.state.value)
+        assertEquals(null, store.lastLatestTag)
+        assertEquals(null, store.lastLatestVersion)
+        assertEquals(0L, store.lastCheckedAt)
+        check.check(force = false)
+        assertEquals(1, calls)
+    }
+
+    @Test
     fun nothingStoredIsUnknown() {
         val check = check()
         assertEquals(UpdateState.Unknown, check.state.value)
