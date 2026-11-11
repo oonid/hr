@@ -564,7 +564,7 @@ class ImageStoreTest {
 
         assertTrue(calls.isEmpty())
         assertEquals(before, files.imageRecord.readText())
-        assertEquals(listOf("End the terminal and wait for Setup and the login to finish before updating."), store.operation.value!!.lines)
+        assertEquals(listOf("End the terminal and wait for Setup and the login to finish before changing the Hermes image."), store.operation.value!!.lines)
         assertFalse(store.operation.value!!.succeeded)
         assertEquals(0, restarts.get())
     }
@@ -1014,7 +1014,7 @@ class ImageStoreTest {
 
         assertEquals(0, restarts.get())
         assertEquals("hermes-v2", store.installed.value?.alias)
-        assertEquals("End the terminal and wait for Setup and the login to finish before updating.", store.lastLine())
+        assertEquals("End the terminal and wait for Setup and the login to finish before changing the Hermes image.", store.lastLine())
     }
 
     @Test
@@ -1029,7 +1029,7 @@ class ImageStoreTest {
         store.awaitIdle()
         assertTrue(calls.isEmpty())
         assertEquals("hermes", store.previous.value?.alias)
-        assertEquals("End the terminal and wait for Setup and the login to finish before updating.", store.lastLine())
+        assertEquals("End the terminal and wait for Setup and the login to finish before changing the Hermes image.", store.lastLine())
 
         sessionsBlocking = false
         val interrupted = installedV1("pending.alias=hermes-v3", "pending.build_tag=v3", "pending.version=v0.24.0")
@@ -1038,7 +1038,7 @@ class ImageStoreTest {
         interrupted.awaitIdle()
         assertTrue(calls.isEmpty())
         assertEquals("v3", interrupted.interrupted.value?.tag)
-        assertEquals("End the terminal and wait for Setup and the login to finish before updating.", interrupted.lastLine())
+        assertEquals("End the terminal and wait for Setup and the login to finish before changing the Hermes image.", interrupted.lastLine())
     }
 
     @Test
