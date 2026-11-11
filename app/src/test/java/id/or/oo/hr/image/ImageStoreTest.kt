@@ -450,7 +450,7 @@ class ImageStoreTest {
         store.awaitIdle()
 
         assertEquals("hermes", store.installed.value?.alias)
-        assertEquals(0, stops.get())
+        assertEquals(listOf("restart", "restart", "stop"), events)
         assertEquals(
             "The new image did not start (port 8642 in use). hr is back on v1. " +
                 "The previous image did not start either (the gateway stopped with exit code 1).",
@@ -604,6 +604,7 @@ class ImageStoreTest {
         assertNull(store().interrupted.value)
         assertFalse(files.imageRecord.readText().contains("pending."))
         assertEquals("hermes", store.installed.value?.alias)
+        assertEquals("Removed v2.", store.lastLine())
         assertTrue(store.operation.value!!.succeeded)
     }
 
@@ -616,6 +617,7 @@ class ImageStoreTest {
 
         assertTrue(calls.isEmpty())
         assertNull(store.interrupted.value)
+        assertEquals(listOf("Removed v2."), store.operation.value!!.lines)
         assertFalse(store.removeInterrupted())
     }
 
@@ -727,12 +729,19 @@ class ImageStoreTest {
         files.rootfs("hermes-v0").mkdirs()
         val store = store()
         val keptDuringRestart = CopyOnWriteArrayList<Boolean>()
-        onRestart = { keptDuringRestart += files.rootfs("hermes-v0").isDirectory }
+        val recordDuringRestart = CopyOnWriteArrayList<String>()
+        onRestart = {
+            keptDuringRestart += files.rootfs("hermes-v0").isDirectory
+            recordDuringRestart += files.imageRecord.readText()
+        }
 
         store.update(v3)
         store.awaitIdle()
 
         assertEquals(listOf(true), keptDuringRestart)
+        assertTrue(recordDuringRestart.single().contains("older.alias=hermes-v0"))
+        assertTrue(recordDuringRestart.single().contains("older.build_tag=v0"))
+        assertFalse(files.imageRecord.readText().contains("older."))
 
         assertEquals(
             listOf(
@@ -773,7 +782,7 @@ class ImageStoreTest {
     }
 
     @Test
-    fun aFailedRemovalOfTheImageTwoBuildsOldIsReported() {
+    fun aFailedOlderRemovalKeepsItInTheRecord() {
         writeRecord(*arrayOf("alias=hermes-v1") + previousRecord("hermes-v0", "v0"))
         files.rootfs("hermes-v1").mkdirs()
         files.rootfs("hermes-v0").mkdirs()
@@ -787,6 +796,164 @@ class ImageStoreTest {
         assertEquals("hermes-v3", store.installed.value?.alias)
         assertEquals("hermes-v1", store.previous.value?.alias)
         assertTrue(store.operation.value!!.succeeded)
+        assertTrue(files.imageRecord.readText().contains("older.alias=hermes-v0"))
+        exitCode = 0
+        calls.clear()
+
+        store().apply {
+            assertTrue(removePrevious())
+            awaitIdle()
+        }
+
+        assertEquals(listOf(listOf("remove", "hermes-v0"), listOf("remove", "hermes-v1")), calls)
+        assertFalse(files.imageRecord.readText().contains("older."))
+        assertFalse(files.imageRecord.readText().contains("previous."))
+    }
+
+    private fun currentV2OwingV1(): ImageStore {
+        writeRecord(
+            "reference=ghcr.io/oonid/hermes-agent:v2",
+            "build_tag=v2",
+            "alias=hermes-v2",
+            "older.alias=hermes-v1",
+            "older.build_tag=v1",
+        )
+        files.rootfs("hermes-v2").mkdirs()
+        files.rootfs("hermes-v1").mkdirs()
+        return store()
+    }
+
+    @Test
+    fun aCrashBeforeTheOlderImageIsRemovedKeepsItInTheRecord() {
+        val store = currentV2OwingV1()
+        assertEquals("hermes-v2", store.installed.value?.alias)
+        assertNull(store.previous.value)
+
+        store.update(v3)
+        store.awaitIdle()
+
+        assertEquals(
+            listOf(
+                listOf("remove", "hermes-v1"),
+                listOf("install", "ghcr.io/oonid/hermes-agent:v3", "--override-alias", "hermes-v3"),
+            ),
+            calls,
+        )
+        assertEquals("Removed the older image (v1).", store.operation.value!!.lines.first())
+        assertFalse(files.imageRecord.readText().contains("older."))
+        assertEquals("hermes-v3", store.installed.value?.alias)
+        assertEquals("hermes-v2", store.previous.value?.alias)
+    }
+
+    @Test
+    fun aFailedOwedRemovalStopsTheUpdate() {
+        val store = currentV2OwingV1()
+        val before = files.imageRecord.readText()
+        exitCode = 1
+
+        store.update(v3)
+        store.awaitIdle()
+
+        assertEquals(listOf(listOf("remove", "hermes-v1")), calls)
+        assertEquals(before, files.imageRecord.readText())
+        assertEquals("pr-cli exited with 1.", store.lastLine())
+        assertFalse(store.operation.value!!.succeeded)
+        assertEquals(0, restarts.get())
+    }
+
+    @Test
+    fun anOwedRemovalWhoseContainerIsGoneIsCleared() {
+        val store = currentV2OwingV1()
+        files.containerDir("hermes-v1").deleteRecursively()
+        marker("hermes-v1").writeText("")
+        exitCode = 1
+
+        store.update(v3)
+        store.awaitIdle()
+
+        assertEquals(listOf("remove", "hermes-v1"), calls.first())
+        assertEquals("install", calls[1].first())
+        assertFalse(files.imageRecord.readText().contains("older."))
+    }
+
+    @Test
+    fun anOwedRemovalWithNothingOnDiskIsClearedWithoutPrCli() {
+        val store = currentV2OwingV1()
+        files.containerDir("hermes-v1").deleteRecursively()
+
+        store.update(v3)
+        store.awaitIdle()
+
+        assertEquals("install", calls.single().first())
+        assertFalse(files.imageRecord.readText().contains("older."))
+    }
+
+    @Test
+    fun switchBackRemovesAnOwedOlderImageFirst() {
+        writeRecord(
+            *arrayOf("reference=ghcr.io/oonid/hermes-agent:v2", "build_tag=v2", "alias=hermes-v2") +
+                previousRecord("hermes", "v1") + arrayOf("older.alias=hermes-v0", "older.build_tag=v0"),
+        )
+        files.rootfs("hermes-v2").mkdirs()
+        files.rootfs("hermes").mkdirs()
+        files.rootfs("hermes-v0").mkdirs()
+        val store = store()
+
+        store.switchBack()
+        store.awaitIdle()
+
+        assertEquals(listOf(listOf("remove", "hermes-v0")), calls)
+        assertEquals("hermes", store.installed.value?.alias)
+        assertEquals("hermes-v2", store.previous.value?.alias)
+        assertFalse(files.imageRecord.readText().contains("older."))
+    }
+
+    @Test
+    fun anOlderEntryNamingAKeptImageIsNeverRemoved() {
+        val store = installedV1("older.alias=hermes", "older.build_tag=v1")
+
+        store.update(v2)
+        store.awaitIdle()
+
+        assertEquals(listOf("install"), calls.map { it.first() })
+        assertTrue(files.rootfs("hermes").isDirectory)
+        assertEquals("hermes", store.previous.value?.alias)
+        assertFalse(files.imageRecord.readText().contains("older."))
+    }
+
+    @Test
+    fun aPreviousWithALeftoverMarkerIsNotKept() {
+        files.rootfs("hermes-v0").mkdirs()
+        marker("hermes-v0").writeText("")
+        val store = installedV1(*previousRecord("hermes-v0", "v0"))
+
+        assertEquals("hermes", store.installed.value?.alias)
+        assertNull(store.previous.value)
+    }
+
+    @Test
+    fun aCurrentWithALeftoverMarkerFallsBackToThePrevious() {
+        writeRecord(*arrayOf("alias=hermes-v2") + previousRecord("hermes", "v1"))
+        files.rootfs("hermes-v2").mkdirs()
+        marker("hermes-v2").writeText("")
+        files.rootfs("hermes").mkdirs()
+
+        assertEquals("hermes", store().installed.value?.alias)
+    }
+
+    @Test
+    fun aCancelledOperationEndsWithoutAnError() {
+        gate = CompletableDeferred()
+        val store = installedV1()
+        store.update(v2)
+        eventually { calls.size == 1 }
+
+        scope.cancel()
+        store.awaitIdle()
+
+        assertFalse(store.operation.value!!.lines.any { it.startsWith("ERROR") })
+        assertFalse(store.operation.value!!.succeeded)
+        assertEquals("hermes", store.installed.value?.alias)
     }
 
     @Test
@@ -826,7 +993,7 @@ class ImageStoreTest {
         assertEquals("hermes-v2", store.previous.value?.alias)
         assertEquals(1, restarts.get())
         assertEquals(ImageStore.Kind.SwitchBack, store.operation.value!!.kind)
-        assertEquals("Updated to v1. The previous image (v2) is kept until you remove it.", store.lastLine())
+        assertEquals("Switched back to v1. The image v2 is kept until you remove it.", store.lastLine())
     }
 
     @Test
@@ -862,6 +1029,7 @@ class ImageStoreTest {
         assertEquals("hermes-v2", store.installed.value?.alias)
         assertTrue(files.rootfs("hermes-v2").isDirectory)
         assertFalse(files.imageRecord.readText().contains("previous."))
+        assertEquals("Removed v1.", store.lastLine())
         assertTrue(store.operation.value!!.succeeded)
     }
 
@@ -883,11 +1051,18 @@ class ImageStoreTest {
     fun removeRemovesEveryHermesContainer() {
         writeRecord(
             *arrayOf("alias=hermes-v2") + previousRecord("hermes", "v1") +
-                arrayOf("pending.alias=hermes-v3", "pending.build_tag=v3", "pending.version=v0.24.0"),
+                arrayOf(
+                    "pending.alias=hermes-v3",
+                    "pending.build_tag=v3",
+                    "pending.version=v0.24.0",
+                    "older.alias=hermes-v1",
+                    "older.build_tag=v1",
+                ),
         )
         files.rootfs("hermes-v2").mkdirs()
         files.rootfs("hermes").mkdirs()
         marker("hermes-v3").writeText("")
+        files.rootfs("hermes-v1").mkdirs()
         files.rootfs("hermes-v0").mkdirs()
         files.rootfs("other").mkdirs()
         val store = store()
@@ -896,10 +1071,16 @@ class ImageStoreTest {
         store.awaitIdle()
 
         assertEquals(
-            setOf(listOf("remove", "hermes-v3"), listOf("remove", "hermes"), listOf("remove", "hermes-v2"), listOf("remove", "hermes-v0")),
+            setOf(
+                listOf("remove", "hermes-v3"),
+                listOf("remove", "hermes"),
+                listOf("remove", "hermes-v2"),
+                listOf("remove", "hermes-v1"),
+                listOf("remove", "hermes-v0"),
+            ),
             calls.toSet(),
         )
-        assertEquals(4, calls.size)
+        assertEquals(5, calls.size)
         assertEquals(listOf("remove", "hermes-v2"), calls.last())
         assertFalse(files.imageRecord.exists())
         assertNull(store.installed.value)

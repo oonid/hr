@@ -5,6 +5,7 @@ import id.or.oo.hr.HrFiles
 import id.or.oo.hr.setup.GatewayRestart
 import id.or.oo.hr.writePrivate
 import id.or.oo.pr.session.DistroCommand
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -38,7 +39,9 @@ class ImageStore(
 
     private data class Pending(val alias: String, val build: ImageBuild)
 
-    private data class Record(val current: InstalledImage?, val previous: InstalledImage?, val pending: Pending?)
+    private data class Older(val alias: String, val tag: String)
+
+    private data class Record(val current: InstalledImage?, val previous: InstalledImage?, val pending: Pending?, val older: Older?)
 
     private val lock = Any()
 
@@ -130,15 +133,18 @@ class ImageStore(
         if (_operation.value?.running == true) return false
         _operation.value = Operation(kind, emptyList(), running = true)
         scope.launch {
-            val succeeded = try {
-                work()
+            var succeeded = false
+            try {
+                succeeded = work()
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 append("ERROR: ${e.message ?: e.javaClass.simpleName}")
-                false
+            } finally {
+                publish()
+                _containerPresent.value = containerOnDisk()
+                _operation.update { it?.copy(running = false, succeeded = succeeded) }
             }
-            publish()
-            _containerPresent.value = containerOnDisk()
-            _operation.update { it?.copy(running = false, succeeded = succeeded) }
         }
         return true
     }
@@ -161,6 +167,7 @@ class ImageStore(
     }
 
     private suspend fun updating(latest: ImageBuild): Boolean {
+        if (!olderSettled()) return false
         if (blocked()) return false
         val free = freeBytes()
         if (free < MIN_FREE_BYTES) {
@@ -170,10 +177,10 @@ class ImageStore(
         val target = aliasFor(latest)
         val reference = "${Hermes.REPOSITORY}:${latest.tag}"
         val before = snapshot()
-        val reusable = before.previous?.takeIf { it.alias == target && files.rootfs(target).isDirectory }
-            ?: before.pending?.takeIf { it.alias == target && files.rootfs(target).isDirectory && !marker(target).exists() }
+        val reusable = before.previous?.takeIf { it.alias == target && present(target) }
+            ?: before.pending?.takeIf { it.alias == target && present(target) }
                 ?.let { InstalledImage(reference, latest.tag, latest.version, clock(), target) }
-        if (reusable != null) return switchTo(reusable)
+        if (reusable != null) return switchTo(reusable, back = false)
         val older = before.pending?.takeIf { it.alias != target && it.alias != before.current?.alias && it.alias != before.previous?.alias }
         if (older != null && onDisk(older.alias) && !removed(older.alias)) return false
         commit(snapshot().copy(pending = Pending(target, latest)))
@@ -184,12 +191,13 @@ class ImageStore(
             append("pr-cli exited with $code.")
             return false
         }
-        return switchTo(InstalledImage(reference, latest.tag, latest.version, clock(), target))
+        return switchTo(InstalledImage(reference, latest.tag, latest.version, clock(), target), back = false)
     }
 
     private suspend fun switchingBack(): Boolean {
+        if (!olderSettled()) return false
         if (blocked()) return false
-        return switchTo(snapshot().previous ?: return false)
+        return switchTo(snapshot().previous ?: return false, back = true)
     }
 
     private fun blocked(): Boolean {
@@ -198,29 +206,35 @@ class ImageStore(
         return true
     }
 
-    private suspend fun switchTo(target: InstalledImage): Boolean {
+    private suspend fun switchTo(target: InstalledImage, back: Boolean): Boolean {
         val before = snapshot()
         val old = checkNotNull(before.current)
-        val older = before.previous?.takeIf { it.alias != target.alias }
+        val older = before.previous?.takeIf { it.alias != target.alias }?.let { Older(it.alias, it.buildTag) } ?: before.older
         val pending = before.pending?.takeIf { it.alias != target.alias }
         val wasActive = gatewayActive()
-        commit(Record(target, old, pending))
+        commit(Record(target, old, pending, older))
         publish()
         val reason = restartGateway()
         val succeeded = if (reason == null) {
             if (!wasActive) stopGateway()
-            append("Updated to ${target.buildTag}. The previous image (${old.buildTag}) is kept until you remove it.")
+            append(
+                if (back) {
+                    "Switched back to ${target.buildTag}. The image ${old.buildTag} is kept until you remove it."
+                } else {
+                    "Updated to ${target.buildTag}. The previous image (${old.buildTag}) is kept until you remove it."
+                },
+            )
             true
         } else {
-            commit(Record(old, target, pending))
+            commit(Record(old, target, pending, older))
             publish()
             val again = restartGateway()
-            if (again == null && !wasActive) stopGateway()
-            val back = "The new image did not start ($reason). hr is back on ${old.buildTag}."
-            append(if (again == null) back else "$back The previous image did not start either ($again).")
+            if (!wasActive) stopGateway()
+            val line = "The new image did not start ($reason). hr is back on ${old.buildTag}."
+            append(if (again == null) line else "$line The previous image did not start either ($again).")
             false
         }
-        if (older != null) removeOlder(older)
+        olderSettled()
         return succeeded
     }
 
@@ -233,21 +247,26 @@ class ImageStore(
         }
     }
 
-    private suspend fun removeOlder(older: InstalledImage) {
+    private suspend fun olderSettled(): Boolean {
+        val older = snapshot().older ?: return true
         if (onDisk(older.alias)) {
             val code = command.run(listOf("remove", older.alias), ::append)
             if (code != 0) {
                 append("pr-cli exited with $code.")
-                return
+                if (files.containerDir(older.alias).exists()) return false
             }
         }
-        append("Removed the older image (${older.buildTag}).")
+        commit(snapshot().copy(older = null))
+        append("Removed the older image (${older.tag}).")
+        return true
     }
 
     private suspend fun removingPrevious(): Boolean {
+        if (!olderSettled()) return false
         val previous = snapshot().previous ?: return false
         if (!removed(previous.alias)) return false
         commit(snapshot().copy(previous = null))
+        append("Removed ${previous.buildTag}.")
         return true
     }
 
@@ -256,6 +275,7 @@ class ImageStore(
         val pending = known.pending?.takeIf { interruptedOf(known) != null } ?: return false
         if (onDisk(pending.alias) && !removed(pending.alias)) return false
         commit(snapshot().copy(pending = null))
+        append("Removed ${pending.build.tag}.")
         return true
     }
 
@@ -272,7 +292,7 @@ class ImageStore(
     private suspend fun removing(): Boolean {
         val known = snapshot()
         val current = known.current?.alias ?: recordedAlias()
-        val aliases = (listOfNotNull(known.pending?.alias, known.previous?.alias) + leftovers() + recordedAlias() + current)
+        val aliases = (listOfNotNull(known.pending?.alias, known.older?.alias, known.previous?.alias) + leftovers() + recordedAlias() + current)
             .distinct()
             .filter(::onDisk)
             .let { found -> (found - current) + listOfNotNull(current.takeIf { it in found }) }
@@ -283,7 +303,7 @@ class ImageStore(
                 return false
             }
         }
-        commit(Record(null, null, null))
+        commit(EMPTY)
         append("Removed. The profile in hr's files is kept.")
         return true
     }
@@ -321,17 +341,22 @@ class ImageStore(
         record.pending?.takeIf { it.alias != record.current?.alias && it.alias != record.previous?.alias }?.build
 
     private fun load(): Record {
-        val properties = readRecord() ?: return Record(null, null, null)
-        val recorded = properties.image("", Hermes.CONTAINER)?.takeIf(::present)
-        val kept = properties.image(PREVIOUS, null)?.takeIf(::present)
+        val properties = readRecord() ?: return EMPTY
+        val recorded = properties.image("", Hermes.CONTAINER)?.takeIf { present(it.alias) }
+        val kept = properties.image(PREVIOUS, null)?.takeIf { present(it.alias) }
         val pending = properties.getProperty(PENDING + ALIAS)?.let { alias ->
             val tag = properties.getProperty(PENDING + BUILD_TAG) ?: return@let null
             Pending(alias, ImageBuild(tag, properties.getProperty(PENDING + VERSION).orEmpty()))
         }
-        return if (recorded != null) Record(recorded, kept, pending) else Record(kept, null, pending)
+        val older = properties.getProperty(OLDER + ALIAS)?.let { alias ->
+            Older(alias, properties.getProperty(OLDER + BUILD_TAG) ?: return@let null)
+        }
+        val (current, previous) = if (recorded != null) recorded to kept else kept to null
+        val owed = older?.takeIf { it.alias != current?.alias && it.alias != previous?.alias }
+        return Record(current, previous, pending, owed)
     }
 
-    private fun present(image: InstalledImage) = files.rootfs(image.alias).isDirectory
+    private fun present(alias: String) = files.rootfs(alias).isDirectory && !marker(alias).exists()
 
     private fun Properties.image(prefix: String, defaultAlias: String?): InstalledImage? = InstalledImage(
         reference = getProperty(prefix + REFERENCE) ?: return null,
@@ -347,7 +372,7 @@ class ImageStore(
     }
 
     private fun commit(next: Record) = synchronized(lock) {
-        if (next == Record(null, null, null)) {
+        if (next == EMPTY) {
             files.imageRecord.delete()
         } else {
             val properties = Properties().apply {
@@ -357,6 +382,10 @@ class ImageStore(
                     setProperty(PENDING + ALIAS, it.alias)
                     setProperty(PENDING + BUILD_TAG, it.build.tag)
                     setProperty(PENDING + VERSION, it.build.version)
+                }
+                next.older?.let {
+                    setProperty(OLDER + ALIAS, it.alias)
+                    setProperty(OLDER + BUILD_TAG, it.tag)
                 }
             }
             val text = StringWriter().also { properties.store(it, null) }.toString()
@@ -374,6 +403,7 @@ class ImageStore(
     }
 
     private companion object {
+        val EMPTY = Record(null, null, null, null)
         const val MAX_LINES = 200
         const val IN_USE = "Stop the gateway and end the terminal before removing the image."
         const val SESSIONS_BLOCKING = "End the terminal and wait for the login to finish before updating."
@@ -388,5 +418,6 @@ class ImageStore(
         const val ALIAS = "alias"
         const val PREVIOUS = "previous."
         const val PENDING = "pending."
+        const val OLDER = "older."
     }
 }
