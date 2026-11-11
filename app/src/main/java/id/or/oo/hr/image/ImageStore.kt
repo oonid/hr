@@ -160,7 +160,7 @@ class ImageStore(
             return false
         }
         val image = InstalledImage(reference, build.tag, build.version, clock(), Hermes.CONTAINER)
-        commit(snapshot().copy(current = image))
+        commit(Record(image, null, null, null))
         publish()
         append("Installed ${build.tag}.")
         return true
@@ -248,8 +248,14 @@ class ImageStore(
     }
 
     private suspend fun olderSettled(): Boolean {
-        val older = snapshot().older ?: return true
+        val known = snapshot()
+        val older = known.older ?: return true
+        if (older.alias == known.current?.alias || older.alias == known.previous?.alias) {
+            commit(known.copy(older = null))
+            return true
+        }
         if (onDisk(older.alias)) {
+            append("Removing ${older.alias}…")
             val code = command.run(listOf("remove", older.alias), ::append)
             if (code != 0) {
                 append("pr-cli exited with $code.")
@@ -352,8 +358,7 @@ class ImageStore(
             Older(alias, properties.getProperty(OLDER + BUILD_TAG) ?: return@let null)
         }
         val (current, previous) = if (recorded != null) recorded to kept else kept to null
-        val owed = older?.takeIf { it.alias != current?.alias && it.alias != previous?.alias }
-        return Record(current, previous, pending, owed)
+        return Record(current, previous, pending, older)
     }
 
     private fun present(alias: String) = files.rootfs(alias).isDirectory && !marker(alias).exists()

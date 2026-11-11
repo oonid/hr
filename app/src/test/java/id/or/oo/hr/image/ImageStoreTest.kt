@@ -774,9 +774,10 @@ class ImageStoreTest {
         assertEquals(
             listOf(
                 "The new image did not start (port 8642 in use). hr is back on v1.",
+                "Removing hermes-v0…",
                 "Removed the older image (v0).",
             ),
-            store.operation.value!!.lines.takeLast(2),
+            store.operation.value!!.lines.takeLast(3),
         )
         assertFalse(store.operation.value!!.succeeded)
     }
@@ -839,7 +840,7 @@ class ImageStoreTest {
             ),
             calls,
         )
-        assertEquals("Removed the older image (v1).", store.operation.value!!.lines.first())
+        assertEquals(listOf("Removing hermes-v1…", "Removed the older image (v1)."), store.operation.value!!.lines.take(2))
         assertFalse(files.imageRecord.readText().contains("older."))
         assertEquals("hermes-v3", store.installed.value?.alias)
         assertEquals("hermes-v2", store.previous.value?.alias)
@@ -856,7 +857,7 @@ class ImageStoreTest {
 
         assertEquals(listOf(listOf("remove", "hermes-v1")), calls)
         assertEquals(before, files.imageRecord.readText())
-        assertEquals("pr-cli exited with 1.", store.lastLine())
+        assertEquals(listOf("Removing hermes-v1…", "pr-cli exited with 1."), store.operation.value!!.lines)
         assertFalse(store.operation.value!!.succeeded)
         assertEquals(0, restarts.get())
     }
@@ -1105,8 +1106,19 @@ class ImageStoreTest {
     }
 
     @Test
-    fun installKeepsAnInterruptedInstall() {
-        writeRecord("pending.alias=hermes-v2", "pending.build_tag=v2", "pending.version=v0.23.0")
+    fun installAfterAPartialRemoveWritesAFreshRecord() {
+        writeRecord(
+            *arrayOf("alias=hermes-v3") + previousRecord("hermes-v0", "v0") +
+                arrayOf(
+                    "pending.alias=hermes-v2",
+                    "pending.build_tag=v2",
+                    "pending.version=v0.23.0",
+                    "older.alias=hermes-v1",
+                    "older.build_tag=v1",
+                ),
+        )
+        files.rootfs("hermes-v3").mkdirs()
+        marker("hermes-v3").writeText("")
         val store = store()
         assertNull(store.installed.value)
 
@@ -1114,8 +1126,33 @@ class ImageStoreTest {
         store.awaitIdle()
 
         assertEquals("hermes", store.installed.value?.alias)
-        assertEquals(v2, store.interrupted.value)
-        assertEquals(v2, store().interrupted.value)
+        assertNull(store.interrupted.value)
+        assertNull(store().interrupted.value)
+        val text = files.imageRecord.readText()
+        assertFalse(text.contains("previous."))
+        assertFalse(text.contains("pending."))
+        assertFalse(text.contains("older."))
+        assertFalse(text.contains("hermes-v3"))
+    }
+
+    @Test
+    fun anOwedRemovalNeverTouchesTheCurrentImage() {
+        writeRecord("alias=hermes-v3", "older.alias=hermes", "older.build_tag=v0")
+        files.rootfs("hermes-v3").mkdirs()
+        marker("hermes-v3").writeText("")
+        val store = store()
+        store.install()
+        store.awaitIdle()
+        calls.clear()
+
+        store.update(v2)
+        store.awaitIdle()
+
+        assertFalse(calls.contains(listOf("remove", "hermes")))
+        assertTrue(files.rootfs("hermes").isDirectory)
+        assertEquals("hermes-v2", store.installed.value?.alias)
+        assertEquals("hermes", store.previous.value?.alias)
+        assertFalse(files.imageRecord.readText().contains("older."))
     }
 
     @Test
