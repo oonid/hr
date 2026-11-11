@@ -111,6 +111,8 @@ private fun ImageCard(
 ) {
     var confirmUpdate by rememberSaveable { mutableStateOf(false) }
     val running = operation?.running == true
+    val available = update as? UpdateState.Available
+    LaunchedEffect(available) { if (available == null) confirmUpdate = false }
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(12.dp)) {
             Text("Hermes image", style = MaterialTheme.typography.titleSmall)
@@ -120,7 +122,9 @@ private fun ImageCard(
                     when (update) {
                         is UpdateState.Available -> {
                             Text("Update available: ${update.latest.tag}")
-                            Button(onClick = { confirmUpdate = true }) { Text("Update") }
+                            if (interrupted?.tag != update.latest.tag) {
+                                Button(onClick = { confirmUpdate = true }) { Text("Update") }
+                            }
                         }
                         is UpdateState.UpToDate -> Text("Up to date")
                         is UpdateState.Failed -> Text("Couldn't check for updates: ${update.reason}")
@@ -148,7 +152,6 @@ private fun ImageCard(
             }
         }
     }
-    val available = update as? UpdateState.Available
     if (confirmUpdate && available != null) {
         AlertDialog(
             onDismissRequest = { confirmUpdate = false },
