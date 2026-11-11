@@ -32,6 +32,7 @@ class ImageStoreTest {
     private val calls = CopyOnWriteArrayList<List<String>>()
     private var exitCode = 0
     private var cacheExitCode = 0
+    private var cacheError: Exception? = null
     private var inUse = false
     private var gate: CompletableDeferred<Unit>? = null
     private var registry = ImageRegistry { build }
@@ -48,6 +49,13 @@ class ImageStoreTest {
                 files.containerDir(args[1]).deleteRecursively()
                 marker(args[1]).delete()
             }
+            "clear-cache" -> {
+                cacheError?.let { throw it }
+                onLine("Clearing cache files...")
+                repeat(8) { onLine("Deleting '/data/user/0/id.or.oo.hr/files/usr/var/lib/pr/dlcache/layer$it'") }
+                onLine("Reclaimed 900 MB of disk space.")
+                onLine("Finished.")
+            }
         }
         if (args.first() == "clear-cache") cacheExitCode else exitCode
     }
@@ -58,6 +66,7 @@ class ImageStoreTest {
     private val stops = AtomicInteger()
     private var onRestart: () -> Unit = {}
     private var gatewayActive = true
+    private var gatewayRunning = false
     private var sessionsBlocking = false
     private var freeBytes = 10L * 1024 * 1024 * 1024
 
@@ -86,6 +95,7 @@ class ImageStoreTest {
         },
         sessionsBlocking = { sessionsBlocking },
         freeBytes = { freeBytes },
+        gatewayRunning = { gatewayRunning },
         clock = { 1_700_000_000_000 },
     )
 
@@ -771,7 +781,7 @@ class ImageStoreTest {
         store.update(v3)
         store.awaitIdle()
 
-        assertEquals(listOf("remove", "hermes-v0"), calls.last())
+        assertEquals(listOf(listOf("remove", "hermes-v0"), listOf("clear-cache")), calls.takeLast(2))
         assertEquals("hermes-v1", store.installed.value?.alias)
         assertEquals("hermes-v3", store.previous.value?.alias)
         assertEquals(
@@ -1366,7 +1376,6 @@ class ImageStoreTest {
         val store = installedV1()
         store.update(v2)
         store.awaitIdle()
-        assertFalse(calls.contains(clearCache))
         resetCounts()
 
         store.update(v2)
@@ -1420,5 +1429,117 @@ class ImageStoreTest {
 
         assertEquals(listOf(listOf("remove", "hermes"), clearCache), calls)
         assertTrue(store.operation.value!!.succeeded)
+    }
+
+    @Test
+    fun anUpdateThatRolledBackStillClearsTheCache() {
+        restartResults += listOf("port 8642 in use", null)
+        val store = installedV1()
+
+        store.update(v2)
+        store.awaitIdle()
+
+        assertEquals(listOf("install", "clear-cache"), calls.map { it.first() })
+        assertEquals("The new image did not start (port 8642 in use). hr is back on v1.", store.lastLine())
+        assertFalse(store.operation.value!!.succeeded)
+    }
+
+    @Test
+    fun theCacheClearsOutputStaysOutOfTheOperation() {
+        val store = store()
+        store.install()
+        store.awaitIdle()
+        assertEquals(listOf("install", "clear-cache"), calls.map { it.first() })
+        assertFalse(store.operation.value!!.lines.any { it.startsWith("Deleting") || it == "Finished." })
+        assertEquals("Installed v0.22.3-pab570a0b-gateway.", store.lastLine())
+
+        store.update(v2)
+        store.awaitIdle()
+        assertEquals("Updated to v2. The previous image (v0.22.3-pab570a0b-gateway) is kept until you remove it.", store.lastLine())
+    }
+
+    @Test
+    fun aThrowingCacheClearDoesNotFailTheInstall() {
+        cacheError = IllegalStateException("pr-cli is missing")
+        val store = store()
+
+        store.install()
+        store.awaitIdle()
+
+        assertEquals("Couldn't clear the download cache: pr-cli is missing", store.lastLine())
+        assertTrue(store.operation.value!!.succeeded)
+        assertEquals("hermes", store.installed.value?.alias)
+
+        cacheError = java.io.IOException()
+        store.update(v2)
+        store.awaitIdle()
+
+        assertEquals("Couldn't clear the download cache: IOException", store.lastLine())
+        assertTrue(store.operation.value!!.succeeded)
+    }
+
+    @Test
+    fun aFailedRecordWriteInConfirmRunningKeepsTheNotice() {
+        val store = installedV1("starting.alias=hermes")
+        val dir = files.imageRecord.parentFile!!
+        dir.setWritable(false)
+        try {
+            store.confirmRunning()
+
+            assertEquals("hermes", store.unverified.value?.alias)
+        } finally {
+            dir.setWritable(true)
+        }
+        assertTrue(files.imageRecord.readText().contains("starting.alias=hermes"))
+
+        store.confirmRunning()
+
+        assertNull(store.unverified.value)
+        assertFalse(files.imageRecord.readText().contains("starting."))
+    }
+
+    @Test
+    fun aRunningGatewayClearsTheNoticeWhenAnotherOperationEnds() {
+        gate = CompletableDeferred()
+        exitCode = 1
+        val store = installedV1("starting.alias=hermes")
+        store.update(v2)
+        eventually { calls.size == 1 }
+        gatewayRunning = true
+        store.confirmRunning()
+        assertEquals("hermes", store.unverified.value?.alias)
+
+        gate!!.complete(Unit)
+        store.awaitIdle()
+
+        assertFalse(store.operation.value!!.succeeded)
+        assertNull(store.unverified.value)
+        assertFalse(files.imageRecord.readText().contains("starting."))
+    }
+
+    @Test
+    fun aStoppedGatewayKeepsTheNoticeWhenAnOperationEnds() {
+        exitCode = 1
+        val store = installedV1("starting.alias=hermes")
+
+        store.update(v2)
+        store.awaitIdle()
+
+        assertEquals("hermes", store.unverified.value?.alias)
+        assertTrue(files.imageRecord.readText().contains("starting.alias=hermes"))
+    }
+
+    @Test
+    fun aRestartThatThrowsKeepsTheNoticeEvenWithTheGatewayRunning() {
+        gatewayRunning = true
+        onRestart = { throw IllegalStateException("restart failed") }
+        val store = installedV1()
+
+        store.update(v2)
+        store.awaitIdle()
+
+        assertEquals("ERROR: restart failed", store.lastLine())
+        assertEquals("hermes-v2", store.unverified.value?.alias)
+        assertTrue(files.imageRecord.readText().contains("starting.alias=hermes-v2"))
     }
 }
