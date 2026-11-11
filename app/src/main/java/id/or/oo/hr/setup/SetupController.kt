@@ -37,6 +37,7 @@ class SetupController(
     private val scope: CoroutineScope,
     private val readStatus: () -> SetupStatus,
     private val io: CoroutineDispatcher = Dispatchers.IO,
+    private val imageBusy: () -> Boolean = { false },
 ) {
     private val lock = Any()
     private val statusLock = Any()
@@ -116,7 +117,7 @@ class SetupController(
 
     private fun begin(first: SetupStep, checks: Boolean = false, work: suspend (Job) -> Unit) {
         synchronized(lock) {
-            if (mutableStep.value.busy) return
+            if (mutableStep.value.busy || imageBusy()) return
             job?.cancel()
             checking = checks
             mutableStep.value = first

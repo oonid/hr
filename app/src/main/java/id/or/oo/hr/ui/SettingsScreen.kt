@@ -36,6 +36,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import id.or.oo.hr.HrApp
 import id.or.oo.hr.image.ImageStore
 import id.or.oo.hr.image.canRemoveImage
+import id.or.oo.hr.image.canStartSession
 import id.or.oo.hr.image.imageInUse
 import id.or.oo.pr.session.isIgnoringBatteryOptimizations
 import java.text.DateFormat
@@ -52,12 +53,14 @@ fun SettingsScreen(app: HrApp, actions: HrActions, modifier: Modifier) {
     val notifications = remember(resumes.intValue) { context.canPostNotifications() }
     val exempt = remember(resumes.intValue) { context.isIgnoringBatteryOptimizations() }
     val installed by app.images.installed.collectAsStateWithLifecycle()
+    val previous by app.images.previous.collectAsStateWithLifecycle()
     val operation by app.images.operation.collectAsStateWithLifecycle()
     val running by app.sessions.running.collectAsStateWithLifecycle()
     val gateway by app.gateway.state.collectAsStateWithLifecycle()
     val containerPresent by app.images.containerPresent.collectAsStateWithLifecycle()
     val inUse = imageInUse(running.isNotEmpty(), gateway)
     var confirmRemove by rememberSaveable { mutableStateOf(false) }
+    var confirmRemovePrevious by rememberSaveable { mutableStateOf(false) }
 
     Column(
         modifier = modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(12.dp),
@@ -84,7 +87,20 @@ fun SettingsScreen(app: HrApp, actions: HrActions, modifier: Modifier) {
                 Text(image.reference)
                 Text("Installed ${DateFormat.getDateTimeInstance().format(Date(image.installedAt))}")
             }
-            operation?.takeIf { it.kind == ImageStore.Kind.Remove }?.let { LogLines(it.lines) }
+            previous?.let { older ->
+                Text("Previous image: ${older.buildTag} (kept for switching back)")
+                Row {
+                    OutlinedButton(
+                        onClick = { app.images.switchBack() },
+                        enabled = canStartSession(operation),
+                    ) { Text("Switch back") }
+                    TextButton(
+                        onClick = { confirmRemovePrevious = true },
+                        enabled = canStartSession(operation),
+                    ) { Text("Remove previous image") }
+                }
+            }
+            operation?.takeIf { it.kind == ImageStore.Kind.Remove || it.kind == ImageStore.Kind.SwitchBack }?.let { LogLines(it.lines) }
             if (containerPresent) {
                 OutlinedButton(
                     onClick = { confirmRemove = true },
@@ -95,11 +111,23 @@ fun SettingsScreen(app: HrApp, actions: HrActions, modifier: Modifier) {
         }
     }
 
+    val older = previous
+    if (confirmRemovePrevious && older != null) {
+        RemovePreviousDialog(
+            older.buildTag,
+            onConfirm = {
+                confirmRemovePrevious = false
+                app.images.removePrevious()
+            },
+            onCancel = { confirmRemovePrevious = false },
+        )
+    }
+
     if (confirmRemove) {
         AlertDialog(
             onDismissRequest = { confirmRemove = false },
             title = { Text("Remove the Hermes image?") },
-            text = { Text("The container is deleted. Your profile (config, keys, sessions, memories) stays in hr's files.") },
+            text = { Text("This removes every Hermes image hr installed; the profile is kept.") },
             confirmButton = {
                 TextButton(onClick = {
                     confirmRemove = false
@@ -109,6 +137,17 @@ fun SettingsScreen(app: HrApp, actions: HrActions, modifier: Modifier) {
             dismissButton = { TextButton(onClick = { confirmRemove = false }) { Text("Cancel") } },
         )
     }
+}
+
+@Composable
+private fun RemovePreviousDialog(tag: String, onConfirm: () -> Unit, onCancel: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text("Remove previous image?") },
+        text = { Text("Remove $tag? You can't switch back to it afterwards.") },
+        confirmButton = { TextButton(onClick = onConfirm) { Text("Remove") } },
+        dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } },
+    )
 }
 
 @Composable
