@@ -118,6 +118,7 @@ private fun ImageCard(
     onSwitchBack: () -> Unit,
 ) {
     var confirmUpdate by rememberSaveable { mutableStateOf(false) }
+    var confirmSwitchBack by rememberSaveable { mutableStateOf(false) }
     val running = operation?.running == true
     val available = update as? UpdateState.Available
     LaunchedEffect(available) { if (available == null) confirmUpdate = false }
@@ -157,7 +158,7 @@ private fun ImageCard(
             }
             if (unverified != null && !running) {
                 Text("hr stopped before ${unverified.buildTag} was seen running.")
-                if (previous != null) OutlinedButton(onClick = onSwitchBack) { Text("Switch back") }
+                if (previous != null) OutlinedButton(onClick = { confirmSwitchBack = true }) { Text("Switch back") }
             }
             if (installed == null && !running) {
                 Button(onClick = onInstall) { Text("Install") }
@@ -183,6 +184,28 @@ private fun ImageCard(
             dismissButton = { TextButton(onClick = { confirmUpdate = false }) { Text("Cancel") } },
         )
     }
+    if (confirmSwitchBack && installed != null && previous != null) {
+        SwitchBackDialog(
+            previous.buildTag,
+            installed.buildTag,
+            onConfirm = {
+                confirmSwitchBack = false
+                onSwitchBack()
+            },
+            onCancel = { confirmSwitchBack = false },
+        )
+    }
+}
+
+@Composable
+fun SwitchBackDialog(previousTag: String, currentTag: String, onConfirm: () -> Unit, onCancel: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text("Switch back to $previousTag?") },
+        text = { Text("hr restarts the gateway on $previousTag and keeps $currentTag. A chat reply in progress is interrupted.") },
+        confirmButton = { TextButton(onClick = onConfirm) { Text("Switch back") } },
+        dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } },
+    )
 }
 
 @Composable

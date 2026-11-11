@@ -61,6 +61,7 @@ fun SettingsScreen(app: HrApp, actions: HrActions, modifier: Modifier) {
     val inUse = imageInUse(running.isNotEmpty(), gateway)
     var confirmRemove by rememberSaveable { mutableStateOf(false) }
     var confirmRemovePrevious by rememberSaveable { mutableStateOf(false) }
+    var confirmSwitchBack by rememberSaveable { mutableStateOf(false) }
 
     Column(
         modifier = modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(12.dp),
@@ -91,7 +92,7 @@ fun SettingsScreen(app: HrApp, actions: HrActions, modifier: Modifier) {
                 Text("Previous image: ${older.buildTag} (kept for switching back)")
                 Row {
                     OutlinedButton(
-                        onClick = { app.images.switchBack() },
+                        onClick = { confirmSwitchBack = true },
                         enabled = canStartSession(operation),
                     ) { Text("Switch back") }
                     TextButton(
@@ -112,6 +113,18 @@ fun SettingsScreen(app: HrApp, actions: HrActions, modifier: Modifier) {
     }
 
     val older = previous
+    val current = installed
+    if (confirmSwitchBack && older != null && current != null) {
+        SwitchBackDialog(
+            older.buildTag,
+            current.buildTag,
+            onConfirm = {
+                confirmSwitchBack = false
+                app.images.switchBack()
+            },
+            onCancel = { confirmSwitchBack = false },
+        )
+    }
     if (confirmRemovePrevious && older != null) {
         RemovePreviousDialog(
             older.buildTag,
