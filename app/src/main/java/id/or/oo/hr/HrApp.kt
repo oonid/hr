@@ -165,6 +165,7 @@ class HrApp : Application(), ProotHost, SessionHost {
             profiles::hasProvider,
             gatewayScope,
             { readStatus(files.profileDir) },
+            imageBusy = { images.operation.value?.running == true },
         )
     }
 

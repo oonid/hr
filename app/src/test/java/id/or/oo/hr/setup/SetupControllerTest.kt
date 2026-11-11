@@ -108,6 +108,7 @@ class SetupControllerTest {
     private val store by lazy { ProfileStore(HrFiles(tmp.root)) }
     private val empty = SetupStatus(false, null, null, null, emptySet(), false, 0)
     private var shown: SetupStatus? = null
+    private var imageRunning = false
     private var reader: (() -> SetupStatus)? = null
     private val gate = CompletableDeferred<Unit>()
     private val controller by lazy {
@@ -120,6 +121,7 @@ class SetupControllerTest {
             { configured },
             scope,
             readStatus = { reader?.invoke() ?: shown ?: readStatus(HrFiles(tmp.root).profileDir) },
+            imageBusy = { imageRunning },
         )
     }
 
@@ -137,6 +139,23 @@ class SetupControllerTest {
     }
 
     private val answered = SetupStep.Done(TestResult.Answered("ok"))
+
+    @Test
+    fun anImageOperationInProgressRefusesSaveAndTest() {
+        imageRunning = true
+
+        controller.test()
+        controller.saveCodexModel("gpt-5.6-luna")
+        controller.saveTelegram("t", "1")
+
+        assertEquals(SetupStep.Choose, controller.step.value)
+        assertTrue(calls.isEmpty())
+
+        imageRunning = false
+        configured = true
+        controller.test()
+        assertEquals(answered, await { it is SetupStep.Done })
+    }
 
     @Test
     fun loggingInThenSavingTestsThroughTheGateway() {
