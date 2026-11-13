@@ -187,8 +187,7 @@ class SetupControllerTest {
         models = null
         modelsGate.complete(Unit)
         controller.chooseChatGpt()
-        await { it is SetupStep.ChatGpt && it.login == LoginState.LoggedIn && !it.loadingModels && "models" in calls }
-        assertEquals(SetupStep.ChatGpt(LoginState.LoggedIn, null, false), controller.step.value)
+        waitFor { "models" in calls && controller.step.value == SetupStep.ChatGpt(LoginState.LoggedIn, null, false) }
 
         controller.saveCodexModel("gpt-typed")
 
